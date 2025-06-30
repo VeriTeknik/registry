@@ -1,0 +1,25 @@
+# SSL Proxy Setup Files
+# Add these lines to your .gitignore if you want to version control the proxy setup
+
+# Traefik configuration (may contain sensitive data)
+acme.json
+traefik-config/
+
+# Nginx Proxy Manager data
+npm-data/
+npm-letsencrypt/
+
+# Environment files with secrets
+.env
+
+# Proxy-specific docker compose files (optional - depends on your preference)
+# docker-compose.proxy.yml
+# docker-compose.override.yml
+
+# SSL certificates and keys
+*.pem
+*.key
+*.crt
+
+# Log files
+*.log 

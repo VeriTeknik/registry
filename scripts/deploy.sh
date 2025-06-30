@@ -1,0 +1,116 @@
+#!/bin/bash
+set -e
+
+# Deployment script for MCP Registry with Traefik
+# This script performs zero-downtime deployment with health checks and rollback capability
+
+COMPOSE_PROJECT_NAME="registry"
+HEALTH_CHECK_URL="https://registry.plugged.in/v0/health"
+DEPLOY_TIMEOUT=300
+BACKUP_TAG="backup-$(date +%Y%m%d-%H%M%S)"
+
+echo "🚀 Starting deployment..."
+
+# Function to check service health
+check_health() {
+    local service=$1
+    local max_attempts=30
+    local attempt=1
+    
+    echo "Checking health of $service..."
+    
+    while [ $attempt -le $max_attempts ]; do
+        if curl -sf "$HEALTH_CHECK_URL" > /dev/null; then
+            echo "✅ Health check passed"
+            return 0
+        fi
+        
+        echo "Attempt $attempt/$max_attempts failed, retrying..."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    
+    echo "❌ Health check failed after $max_attempts attempts"
+    return 1
+}
+
+# Function to backup current state
+backup_current() {
+    echo "📦 Creating backup of current deployment..."
+    
+    # Tag current images as backup
+    docker tag registry:latest registry:$BACKUP_TAG || true
+    
+    # Save current compose files
+    cp docker-compose.yml docker-compose.yml.backup || true
+    cp docker-compose.override.yml docker-compose.override.yml.backup || true
+}
+
+# Function to rollback
+rollback() {
+    echo "⚠️  Rolling back to previous version..."
+    
+    # Stop current containers
+    docker compose down
+    
+    # Restore backup images
+    docker tag registry:$BACKUP_TAG registry:latest || true
+    
+    # Restore compose files
+    mv docker-compose.yml.backup docker-compose.yml || true
+    mv docker-compose.override.yml.backup docker-compose.override.yml || true
+    
+    # Start services
+    docker compose up -d
+    
+    echo "✅ Rollback completed"
+}
+
+# Main deployment process
+main() {
+    # Step 1: Backup current state
+    backup_current
+    
+    # Step 2: Pull latest changes
+    echo "📥 Pulling latest configuration..."
+    
+    # Step 3: Update Traefik if needed
+    echo "🔄 Updating Traefik..."
+    docker compose -f docker-compose.proxy.yml up -d
+    sleep 5
+    
+    # Step 4: Deploy registry with rolling update
+    echo "🔄 Deploying registry service..."
+    
+    # Use rolling update strategy with no-ports compose file
+    docker compose -f docker-compose-noports.yml -f docker-compose.override.yml up -d --no-deps --scale registry=2 registry
+    
+    # Wait for new container to be healthy
+    if ! check_health "registry"; then
+        echo "❌ New deployment failed health check"
+        rollback
+        exit 1
+    fi
+    
+    # Step 5: Remove old container
+    echo "🧹 Cleaning up old containers..."
+    docker compose -f docker-compose-noports.yml -f docker-compose.override.yml up -d --no-deps --scale registry=1 registry
+    
+    # Step 6: Clean up backup images (keep last 3)
+    echo "🧹 Cleaning up old backup images..."
+    docker images | grep "registry.*backup-" | tail -n +4 | awk '{print $2}' | xargs -r docker rmi registry: || true
+    
+    # Step 7: Prune unused resources
+    docker system prune -f --volumes
+    
+    echo "✅ Deployment completed successfully!"
+}
+
+# Trap errors and rollback if needed
+trap 'if [ $? -ne 0 ]; then rollback; fi' EXIT
+
+# Run main deployment
+main
+
+# Remove trap on success
+trap - EXIT

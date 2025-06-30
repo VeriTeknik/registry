@@ -1,0 +1,25 @@
+version: '3.8'
+
+networks:
+  traefik:
+    external: true
+
+services:
+  registry:
+    networks:
+      - default
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.registry.rule=Host(`registry.plugged.in`)"
+      - "traefik.http.routers.registry.tls=true"
+      - "traefik.http.routers.registry.tls.certresolver=letsencrypt"
+      # - "traefik.http.routers.registry.middlewares=security-headers,rate-limit"
+      - "traefik.http.services.registry.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik"
+    # Remove port mapping since Traefik will handle it
+    ports: []
+
+  mongodb:
+    # Keep MongoDB internal-only
+    ports: [] 

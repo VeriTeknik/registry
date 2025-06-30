@@ -1,0 +1,116 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to sync'
+        required: false
+        default: 'main'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/modelcontextprotocol/registry.git || true
+          git fetch upstream
+
+      - name: Check for upstream changes
+        id: check
+        run: |
+          # Get the latest commit from upstream
+          UPSTREAM_COMMIT=$(git rev-parse upstream/${{ github.event.inputs.branch || 'main' }})
+          
+          # Get the merge base
+          MERGE_BASE=$(git merge-base HEAD upstream/${{ github.event.inputs.branch || 'main' }})
+          
+          if [ "$UPSTREAM_COMMIT" = "$MERGE_BASE" ]; then
+            echo "No new changes from upstream"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "New changes detected from upstream"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "upstream_commit=$UPSTREAM_COMMIT" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create sync branch
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          BRANCH_NAME="sync-upstream-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Merge upstream changes
+        if: steps.check.outputs.has_changes == 'true'
+        id: merge
+        run: |
+          # Try to merge upstream changes
+          if git merge upstream/${{ github.event.inputs.branch || 'main' }} --no-edit; then
+            echo "Merge successful"
+            echo "merge_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "Merge has conflicts"
+            echo "merge_success=false" >> $GITHUB_OUTPUT
+            
+            # Show conflict details
+            git status --porcelain | grep "^UU" || true
+          fi
+
+      - name: Push changes
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          git push origin ${{ env.branch_name }}
+
+      - name: Create Pull Request
+        if: steps.check.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.branch_name }}
+          title: "🔄 Sync with upstream changes"
+          body: |
+            ## Upstream Sync
+            
+            This PR synchronizes our fork with the latest changes from the upstream repository.
+            
+            **Upstream commit**: ${{ steps.check.outputs.upstream_commit }}
+            **Merge status**: ${{ steps.merge.outputs.merge_success == 'true' && '✅ Clean merge' || '⚠️ Has conflicts - manual resolution required' }}
+            
+            ### Changes included:
+            ```
+            git log --oneline HEAD..upstream/${{ github.event.inputs.branch || 'main' }}
+            ```
+            
+            ### Next steps:
+            1. Review the changes
+            2. Resolve any conflicts if present
+            3. Ensure all tests pass
+            4. Merge when ready
+            
+            ---
+            *This PR was automatically created by the sync-upstream workflow.*
+          labels: |
+            upstream-sync
+            automated
+          draft: ${{ steps.merge.outputs.merge_success == 'false' }}
+
+      - name: Notify on conflict
+        if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_success == 'false'
+        run: |
+          echo "::warning::Upstream sync has conflicts that need manual resolution"

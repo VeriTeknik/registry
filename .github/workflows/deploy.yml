@@ -1,0 +1,177 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_reason:
+        description: 'Reason for manual deployment'
+        required: true
+
+env:
+  REGISTRY_IMAGE: registry
+  DEPLOY_TIMEOUT: 300
+
+jobs:
+  test:
+    name: Run Tests
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+
+      - name: Run tests
+        run: |
+          go test -v -race ./internal/...
+          ./integrationtests/run_tests.sh
+
+  build:
+    name: Build Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY_IMAGE }}:${{ github.sha }} .
+          docker tag ${{ env.REGISTRY_IMAGE }}:${{ github.sha }} ${{ env.REGISTRY_IMAGE }}:latest
+
+      - name: Save Docker image
+        run: |
+          docker save ${{ env.REGISTRY_IMAGE }}:${{ github.sha }} | gzip > registry-image.tar.gz
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: registry-image.tar.gz
+          retention-days: 1
+
+  deploy:
+    name: Deploy to Server
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy files to server
+        run: |
+          # Create deployment package
+          tar -czf deploy-package.tar.gz \
+            docker-compose.yml \
+            docker-compose.override.yml \
+            docker-compose.proxy.yml \
+            traefik.yml \
+            scripts/deploy.sh \
+            registry-image.tar.gz
+
+          # Copy to server
+          scp -i ~/.ssh/deploy_key \
+            deploy-package.tar.gz \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}/
+
+      - name: Deploy on server
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }}
+            
+            # Extract deployment package
+            tar -xzf deploy-package.tar.gz
+            
+            # Load Docker image
+            gunzip -c registry-image.tar.gz | docker load
+            
+            # Run deployment script
+            chmod +x scripts/deploy.sh
+            ./scripts/deploy.sh
+            
+            # Cleanup
+            rm -f deploy-package.tar.gz registry-image.tar.gz
+          EOF
+
+      - name: Health check
+        run: |
+          # Wait for service to be ready
+          sleep 30
+          
+          # Check health endpoint
+          for i in {1..10}; do
+            if curl -f https://registry.plugged.in/v0/health; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying..."
+            sleep 10
+          done
+          
+          echo "Health check failed after 10 attempts"
+          exit 1
+
+      - name: Notify deployment
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi
+
+  rollback:
+    name: Rollback on Failure
+    needs: deploy
+    if: failure()
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Rollback deployment
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }}
+            
+            # Rollback to previous version
+            if [ -f scripts/rollback.sh ]; then
+              ./scripts/rollback.sh
+            else
+              # Basic rollback: restart with previous image
+              docker compose down
+              docker compose up -d
+            fi
+          EOF
+
+      - name: Notify rollback
+        run: echo "⚠️ Deployment failed and was rolled back"

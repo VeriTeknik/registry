@@ -1,0 +1,21 @@
+[Unit]
+Description=MCP Registry Services (Traefik, Registry, MongoDB)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/pluggedin/registry
+ExecStart=/usr/bin/docker compose -f docker-compose.proxy.yml up -d
+ExecStart=/usr/bin/docker compose -f docker-compose-noports.yml -f docker-compose.override.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose-noports.yml -f docker-compose.override.yml down
+ExecStop=/usr/bin/docker compose -f docker-compose.proxy.yml down
+TimeoutStartSec=0
+Restart=no
+User=pluggedin
+Group=pluggedin
+
+[Install]
+WantedBy=multi-user.target
