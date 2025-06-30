@@ -1,0 +1,29 @@
+services:
+  registry-extended:
+    build:
+      context: .
+      dockerfile: ./extensions/Dockerfile
+    container_name: registry-extended
+    links:
+      - mongodb
+    depends_on:
+      - mongodb
+    environment:
+      - MCP_REGISTRY_DATABASE_URL=${MCP_REGISTRY_DATABASE_URL:-mongodb://mongodb:27017}
+      - MCP_REGISTRY_ENVIRONMENT=${MCP_REGISTRY_ENVIRONMENT:-test}
+      - MCP_REGISTRY_GITHUB_CLIENT_ID=${MCP_REGISTRY_GITHUB_CLIENT_ID}
+      - MCP_REGISTRY_GITHUB_CLIENT_SECRET=${MCP_REGISTRY_GITHUB_CLIENT_SECRET}
+    ports:
+      - 8080:8080
+    restart: "unless-stopped"
+  mongodb:
+    image: mongo
+    container_name: mongodb
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - './.db:/data/db'
+    ports:
+      - 27017:27017
+    restart: "unless-stopped"
