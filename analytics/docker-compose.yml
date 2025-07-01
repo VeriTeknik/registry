@@ -1,0 +1,128 @@
+version: '3.8'
+
+networks:
+  analytics:
+    driver: bridge
+  traefik:
+    external: true
+  registry_default:
+    external: true
+
+volumes:
+  elasticsearch_data:
+  redis_data:
+
+services:
+  # Elasticsearch for analytics data storage
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: analytics-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./elasticsearch/mappings:/usr/share/elasticsearch/mappings
+    ports:
+      - "9200:9200"
+    networks:
+      - analytics
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana for visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: analytics-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=changeme
+      - xpack.security.enabled=false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "5601:5601"
+    networks:
+      - analytics
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kibana.rule=Host(`kibana.plugged.in`)"
+      - "traefik.http.routers.kibana.tls=true"
+      - "traefik.http.routers.kibana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kibana.loadbalancer.server.port=5601"
+      - "traefik.docker.network=traefik"
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: analytics-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - analytics
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB to Elasticsearch sync service
+  sync-service:
+    build:
+      context: ./sync-service
+      dockerfile: Dockerfile
+    container_name: analytics-sync
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/mcp-registry
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - SYNC_INTERVAL=60s
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - analytics
+      - registry_default
+    restart: unless-stopped
+
+  # Analytics API service
+  analytics-api:
+    build:
+      context: ./analytics-api
+      dockerfile: Dockerfile
+    container_name: analytics-api
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379
+      - MONGODB_URI=mongodb://mongodb:27017/mcp-registry
+      - PORT=8081
+      - CORS_ORIGINS=https://plugged.in,https://registry.plugged.in
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    networks:
+      - analytics
+      - traefik
+      - registry_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.analytics.rule=Host(`analytics.plugged.in`)"
+      - "traefik.http.routers.analytics.tls=true"
+      - "traefik.http.routers.analytics.tls.certresolver=letsencrypt"
+      - "traefik.http.services.analytics.loadbalancer.server.port=8081"
+      - "traefik.docker.network=traefik"
+    restart: unless-stopped

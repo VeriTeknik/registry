@@ -1,0 +1,47 @@
+{
+  "mappings": {
+    "properties": {
+      "server_id": {
+        "type": "keyword"
+      },
+      "user_id": {
+        "type": "keyword"
+      },
+      "feedback_type": {
+        "type": "keyword"
+      },
+      "rating": {
+        "type": "byte"
+      },
+      "comment": {
+        "type": "text",
+        "analyzer": "standard"
+      },
+      "sentiment": {
+        "type": "keyword"
+      },
+      "sentiment_score": {
+        "type": "float"
+      },
+      "parent_id": {
+        "type": "keyword"
+      },
+      "is_verified": {
+        "type": "boolean"
+      },
+      "helpful_count": {
+        "type": "integer"
+      },
+      "timestamp": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      }
+    }
+  },
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  }
+}

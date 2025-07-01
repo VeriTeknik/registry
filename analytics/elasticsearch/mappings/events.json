@@ -1,0 +1,77 @@
+{
+  "mappings": {
+    "properties": {
+      "timestamp": {
+        "type": "date"
+      },
+      "event_type": {
+        "type": "keyword"
+      },
+      "server_id": {
+        "type": "keyword"
+      },
+      "server_name": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword"
+          }
+        }
+      },
+      "client_id": {
+        "type": "keyword"
+      },
+      "session_id": {
+        "type": "keyword"
+      },
+      "user_id": {
+        "type": "keyword"
+      },
+      "metadata": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "keyword"
+          },
+          "platform": {
+            "type": "keyword"
+          },
+          "client_version": {
+            "type": "keyword"
+          },
+          "country": {
+            "type": "keyword"
+          },
+          "region": {
+            "type": "keyword"
+          },
+          "error_code": {
+            "type": "keyword"
+          },
+          "error_message": {
+            "type": "text"
+          },
+          "response_time_ms": {
+            "type": "integer"
+          },
+          "tool_name": {
+            "type": "keyword"
+          },
+          "prompt_name": {
+            "type": "keyword"
+          }
+        }
+      }
+    }
+  },
+  "settings": {
+    "number_of_shards": 2,
+    "number_of_replicas": 1,
+    "index": {
+      "lifecycle": {
+        "name": "90-days-retention",
+        "rollover_alias": "events"
+      }
+    }
+  }
+}

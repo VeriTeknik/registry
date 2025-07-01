@@ -1,0 +1,69 @@
+{
+  "mappings": {
+    "properties": {
+      "server_id": {
+        "type": "keyword"
+      },
+      "date": {
+        "type": "date",
+        "format": "yyyy-MM-dd"
+      },
+      "hour": {
+        "type": "byte"
+      },
+      "metrics": {
+        "type": "object",
+        "properties": {
+          "installs": {
+            "type": "integer"
+          },
+          "uninstalls": {
+            "type": "integer"
+          },
+          "active_users": {
+            "type": "integer"
+          },
+          "usage_count": {
+            "type": "integer"
+          },
+          "error_count": {
+            "type": "integer"
+          },
+          "avg_response_ms": {
+            "type": "float"
+          },
+          "p95_response_ms": {
+            "type": "float"
+          },
+          "p99_response_ms": {
+            "type": "float"
+          },
+          "error_rate": {
+            "type": "float"
+          }
+        }
+      },
+      "breakdown": {
+        "type": "object",
+        "properties": {
+          "by_platform": {
+            "type": "object"
+          },
+          "by_version": {
+            "type": "object"
+          },
+          "by_country": {
+            "type": "object"
+          },
+          "by_tool": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  },
+  "settings": {
+    "number_of_shards": 2,
+    "number_of_replicas": 1
+  }
+}
