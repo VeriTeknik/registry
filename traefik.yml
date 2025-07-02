@@ -5,12 +5,7 @@ api:
 entryPoints:
   web:
     address: ":80"
-    http:
-      redirections:
-        entrypoint:
-          to: websecure
-          scheme: https
-          permanent: true
+    # Removed automatic redirect to allow ACME challenges
 
   websecure:
     address: ":443"
@@ -24,7 +19,8 @@ providers:
 certificatesResolvers:
   letsencrypt:
     acme:
-      tlsChallenge: {}
+      httpChallenge:
+        entryPoint: web
       email: cem@plugged.in   # Change this
       storage: acme.json
       caServer: https://acme-v02.api.letsencrypt.org/directory

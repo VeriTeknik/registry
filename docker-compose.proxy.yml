@@ -25,6 +25,7 @@ services:
       - TRAEFIK_API_INSECURE=true
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.traefik.rule=Host(`traefik.plugged.in`)"
-      - "traefik.http.routers.traefik.tls=true"
-      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt" 
+      # Traefik dashboard - accessible only locally on port 8080
+      # - "traefik.http.routers.traefik.rule=Host(`traefik.plugged.in`)"
+      # - "traefik.http.routers.traefik.tls=true"
+      # - "traefik.http.routers.traefik.tls.certresolver=letsencrypt" 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -26,6 +27,8 @@ type Metadata struct {
 // ServersHandler returns a handler for listing registry items with filtering support
 func ServersHandler(registry service.RegistryService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("VP ServersHandler called with URL: %s", r.URL.String())
+		
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -68,6 +71,7 @@ func ServersHandler(registry service.RegistryService) http.HandlerFunc {
 
 		// Build filter map from query parameters
 		filters := buildFilters(r.URL.Query())
+		log.Printf("VP Servers: Filters = %+v", filters)
 
 		var servers []model.Server
 		var nextCursor string
@@ -90,6 +94,14 @@ func ServersHandler(registry service.RegistryService) http.HandlerFunc {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+		}
+
+		// Log the results
+		log.Printf("VP Servers: Found %d servers after filtering (filters=%+v)", len(servers), filters)
+
+		// Ensure we return empty array instead of nil
+		if servers == nil {
+			servers = []model.Server{}
 		}
 
 		// Create paginated response

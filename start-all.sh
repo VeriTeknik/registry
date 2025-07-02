@@ -12,7 +12,8 @@ sleep 5
 
 echo "Starting Registry and MongoDB..."
 # Use no-ports compose file to avoid port conflicts with Traefik
-docker compose -f docker-compose-noports.yml -f docker-compose.override.yml up -d
+# Use extended-override to get the registry with /vp endpoints
+docker compose -f docker-compose-noports.yml -f docker-compose.extended-override.yml up -d
 
 echo "All services started!"
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"

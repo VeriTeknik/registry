@@ -24,6 +24,7 @@ type Config struct {
 	Version            string       `env:"VERSION" envDefault:"dev"`
 	GithubClientID     string       `env:"GITHUB_CLIENT_ID" envDefault:""`
 	GithubClientSecret string       `env:"GITHUB_CLIENT_SECRET" envDefault:""`
+	CORSOrigins        string       `env:"CORS_ORIGINS" envDefault:"*"`
 }
 
 // NewConfig creates a new configuration with default values

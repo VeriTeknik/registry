@@ -12,7 +12,8 @@ sleep 3
 
 echo "Restarting Registry and MongoDB..."
 # Use no-ports compose file to avoid port conflicts with Traefik
-docker compose -f docker-compose-noports.yml -f docker-compose.override.yml restart
+# Use extended-override to get the registry with /vp endpoints
+docker compose -f docker-compose-noports.yml -f docker-compose.extended-override.yml restart
 
 echo "Waiting for Registry to be ready..."
 sleep 5

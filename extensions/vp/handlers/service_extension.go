@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/internal/database"
@@ -15,24 +17,68 @@ func ListWithFilters(registry service.RegistryService, filters map[string]interf
 	// We need to access the database directly since the service layer doesn't expose filtering
 	// This is a temporary solution until filtering is added to the service interface
 	
-	// For now, we'll use the registry's List method and filter in memory
-	// In a production environment, you'd want to extend the service interface or create a new service
+	// If we have filters, we need to get ALL servers to filter properly
+	// This is not ideal for large datasets but necessary for now
+	if len(filters) > 0 {
+		allServers := []model.Server{}
+		currentCursor := ""
+		
+		// Fetch all servers in batches
+		for {
+			batch, nextCursor, err := registry.List(currentCursor, 100) // Get 100 at a time
+			if err != nil {
+				return nil, "", err
+			}
+			
+			allServers = append(allServers, batch...)
+			
+			// If no more pages, break
+			if nextCursor == "" || len(batch) == 0 {
+				break
+			}
+			currentCursor = nextCursor
+		}
+		
+		log.Printf("ListWithFilters: Got %d total servers for filtering", len(allServers))
+		
+		// Apply filters
+		filtered := filterServers(allServers, filters)
+		
+		// Apply pagination to filtered results
+		start := 0
+		if cursor != "" {
+			// Simple cursor implementation - in production you'd want something better
+			for i, s := range filtered {
+				if s.ID == cursor {
+					start = i + 1
+					break
+				}
+			}
+		}
+		
+		end := start + limit
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		
+		result := filtered[start:end]
+		
+		// Determine next cursor
+		nextCursor := ""
+		if end < len(filtered) {
+			nextCursor = filtered[end].ID
+		}
+		
+		return result, nextCursor, nil
+	}
 	
-	// Get all results from the service (this is not ideal for large datasets)
+	// No filters - use normal pagination
 	servers, nextCursor, err := registry.List(cursor, limit)
 	if err != nil {
 		return nil, "", err
 	}
 	
-	// If no filters, return as-is
-	if len(filters) == 0 {
-		return servers, nextCursor, nil
-	}
-	
-	// Apply filters in memory (temporary solution)
-	filtered := filterServers(servers, filters)
-	
-	return filtered, nextCursor, nil
+	return servers, nextCursor, nil
 }
 
 // filterServers applies filters to a list of servers in memory
@@ -48,6 +94,11 @@ func filterServers(servers []model.Server, filters map[string]interface{}) []mod
 		}
 	}
 	
+	// Debug logging
+	if nameFilter, hasName := filters["name"]; hasName {
+		log.Printf("filterServers: name filter='%s', found %d matching servers out of %d total", nameFilter, len(result), len(servers))
+	}
+	
 	return result
 }
 
@@ -56,7 +107,10 @@ func matchesFilters(server model.Server, filters map[string]interface{}) bool {
 	for key, value := range filters {
 		switch key {
 		case "name":
-			if server.Name != value.(string) {
+			// Support partial, case-insensitive name matching
+			nameFilter := strings.ToLower(value.(string))
+			serverName := strings.ToLower(server.Name)
+			if !strings.Contains(serverName, nameFilter) {
 				return false
 			}
 		case "repository.url":

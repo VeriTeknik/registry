@@ -34,6 +34,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    restart: unless-stopped
 
   # Kibana for visualization
   kibana:
@@ -54,11 +55,21 @@ services:
       - traefik
     labels:
       - "traefik.enable=true"
+      # HTTPS router
       - "traefik.http.routers.kibana.rule=Host(`kibana.plugged.in`)"
+      - "traefik.http.routers.kibana.entrypoints=websecure"
       - "traefik.http.routers.kibana.tls=true"
       - "traefik.http.routers.kibana.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kibana.middlewares=kibana-auth"
+      # HTTP router for ACME challenge
+      - "traefik.http.routers.kibana-http.rule=Host(`kibana.plugged.in`)"
+      - "traefik.http.routers.kibana-http.entrypoints=web"
+      - "traefik.http.routers.kibana-http.service=kibana"
       - "traefik.http.services.kibana.loadbalancer.server.port=5601"
       - "traefik.docker.network=traefik"
+      # Basic auth middleware
+      - "traefik.http.middlewares.kibana-auth.basicauth.users=admin:$$apr1$$0dcJnsuX$$/aOTPlJOZWKD9WAl9b/.s/"
+    restart: unless-stopped
 
   # Redis for caching
   redis:
@@ -76,6 +87,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # MongoDB to Elasticsearch sync service
   sync-service:
@@ -120,9 +132,18 @@ services:
       - registry_default
     labels:
       - "traefik.enable=true"
+      # HTTPS router
       - "traefik.http.routers.analytics.rule=Host(`analytics.plugged.in`)"
+      - "traefik.http.routers.analytics.entrypoints=websecure"
       - "traefik.http.routers.analytics.tls=true"
       - "traefik.http.routers.analytics.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.analytics.middlewares=analytics-auth"
+      # HTTP router for ACME challenge
+      - "traefik.http.routers.analytics-http.rule=Host(`analytics.plugged.in`)"
+      - "traefik.http.routers.analytics-http.entrypoints=web"
+      - "traefik.http.routers.analytics-http.service=analytics"
       - "traefik.http.services.analytics.loadbalancer.server.port=8081"
       - "traefik.docker.network=traefik"
+      # Basic auth middleware
+      - "traefik.http.middlewares.analytics-auth.basicauth.users=admin:$$apr1$$0dcJnsuX$$/aOTPlJOZWKD9WAl9b/.s/"
     restart: unless-stopped

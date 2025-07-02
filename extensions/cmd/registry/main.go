@@ -108,9 +108,12 @@ func main() {
 	}
 
 	// Create extended HTTP server with our custom router
+	handler := extensions.NewWithExtensions(cfg, registryService, authService)
+	log.Printf("CORS Origins configured: %s", cfg.CORSOrigins)
+	
 	server := &http.Server{
 		Addr:              cfg.ServerAddress,
-		Handler:           extensions.NewWithExtensions(cfg, registryService, authService),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
