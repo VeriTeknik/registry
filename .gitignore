@@ -5,3 +5,4 @@ build/*
 **/bin
 cmd/registry/registry
 acme.json
+publisher
