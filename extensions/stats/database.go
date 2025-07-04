@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/registry/internal/validation"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -114,24 +115,36 @@ func (db *MongoDatabase) GetStats(ctx context.Context, serverID string, source s
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	// Validate server ID
+	sanitizedServerID, err := validation.SanitizeServerID(serverID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server ID: %w", err)
+	}
+
 	// Default to REGISTRY if source not specified
 	if source == "" {
 		source = SourceRegistry
 	}
 
+	// Validate source
+	validatedSource, err := validation.ValidateSource(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source parameter: %w", err)
+	}
+
 	var stats ServerStats
 	filter := bson.M{
-		"server_id": serverID,
-		"source":    source,
+		"server_id": sanitizedServerID,
+		"source":    validatedSource,
 	}
 	
-	err := db.collection.FindOne(ctx, filter).Decode(&stats)
+	err = db.collection.FindOne(ctx, filter).Decode(&stats)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// Return empty stats if none exist
 			return &ServerStats{
-				ServerID:          serverID,
-				Source:            source,
+				ServerID:          sanitizedServerID,
+				Source:            validatedSource,
 				InstallationCount: 0,
 				Rating:            0,
 				RatingCount:       0,
@@ -149,7 +162,13 @@ func (db *MongoDatabase) GetStatsByServerID(ctx context.Context, serverID string
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	filter := bson.M{"server_id": serverID}
+	// Validate server ID
+	sanitizedServerID, err := validation.SanitizeServerID(serverID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server ID: %w", err)
+	}
+
+	filter := bson.M{"server_id": sanitizedServerID}
 	cursor, err := db.collection.Find(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stats by server ID: %w", err)
@@ -216,15 +235,21 @@ func (db *MongoDatabase) GetAggregatedStats(ctx context.Context, serverID string
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	// Validate server ID first
+	sanitizedServerID, err := validation.SanitizeServerID(serverID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server ID: %w", err)
+	}
+
 	// Get all stats for this server
-	allStats, err := db.GetStatsByServerID(ctx, serverID)
+	allStats, err := db.GetStatsByServerID(ctx, sanitizedServerID)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(allStats) == 0 {
 		return &AggregatedStats{
-			ServerID:         serverID,
+			ServerID:         sanitizedServerID,
 			TotalInstalls:    0,
 			AverageRating:    0,
 			TotalRatingCount: 0,
@@ -235,7 +260,7 @@ func (db *MongoDatabase) GetAggregatedStats(ctx context.Context, serverID string
 
 	// Aggregate the stats
 	aggregated := &AggregatedStats{
-		ServerID:        serverID,
+		ServerID:        sanitizedServerID,
 		SourceBreakdown: make(map[string]*ServerStats),
 		LastUpdated:     time.Now(),
 	}
@@ -287,25 +312,37 @@ func (db *MongoDatabase) IncrementInstallCount(ctx context.Context, serverID str
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Validate server ID
+	sanitizedServerID, err := validation.SanitizeServerID(serverID)
+	if err != nil {
+		return fmt.Errorf("invalid server ID: %w", err)
+	}
+
 	// Default to REGISTRY if source not specified
 	if source == "" {
 		source = SourceRegistry
 	}
 
+	// Validate source
+	validatedSource, err := validation.ValidateSource(source)
+	if err != nil {
+		return fmt.Errorf("invalid source parameter: %w", err)
+	}
+
 	filter := bson.M{
-		"server_id": serverID,
-		"source":    source,
+		"server_id": sanitizedServerID,
+		"source":    validatedSource,
 	}
 	update := bson.M{
 		"$inc": bson.M{"installation_count": 1},
 		"$set": bson.M{
 			"last_updated": time.Now(),
-			"source":       source,
+			"source":       validatedSource,
 		},
 	}
 	opts := options.Update().SetUpsert(true)
 
-	_, err := db.collection.UpdateOne(ctx, filter, update, opts)
+	_, err = db.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
 		return fmt.Errorf("failed to increment install count: %w", err)
 	}
@@ -318,19 +355,31 @@ func (db *MongoDatabase) UpdateRating(ctx context.Context, serverID string, sour
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Validate server ID
+	sanitizedServerID, err := validation.SanitizeServerID(serverID)
+	if err != nil {
+		return fmt.Errorf("invalid server ID: %w", err)
+	}
+
 	// Default to REGISTRY if source not specified
 	if source == "" {
 		source = SourceRegistry
 	}
 
+	// Validate source
+	validatedSource, err := validation.ValidateSource(source)
+	if err != nil {
+		return fmt.Errorf("invalid source parameter: %w", err)
+	}
+
 	// First get current stats to calculate new average
 	var current ServerStats
 	filter := bson.M{
-		"server_id": serverID,
-		"source":    source,
+		"server_id": sanitizedServerID,
+		"source":    validatedSource,
 	}
 	
-	err := db.collection.FindOne(ctx, filter).Decode(&current)
+	err = db.collection.FindOne(ctx, filter).Decode(&current)
 	if err != nil && err != mongo.ErrNoDocuments {
 		return fmt.Errorf("failed to get current stats: %w", err)
 	}
@@ -363,14 +412,21 @@ func (db *MongoDatabase) GetTopByInstalls(ctx context.Context, limit int, source
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	filter := bson.M{}
-	if source != "" && source != "ALL" {
-		filter["source"] = source
+	// Validate limit
+	validatedLimit, err := validation.ValidateLimit(limit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid limit: %w", err)
+	}
+
+	// Create safe filter using validation
+	filter, err := validation.CreateSafeFilter(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source parameter: %w", err)
 	}
 
 	opts := options.Find().
 		SetSort(bson.D{{Key: "installation_count", Value: -1}}).
-		SetLimit(int64(limit))
+		SetLimit(int64(validatedLimit))
 
 	cursor, err := db.collection.Find(ctx, filter, opts)
 	if err != nil {
@@ -391,15 +447,27 @@ func (db *MongoDatabase) GetTopByRating(ctx context.Context, limit int, source s
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	// Only include servers with at least 5 ratings
+	// Validate limit
+	validatedLimit, err := validation.ValidateLimit(limit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid limit: %w", err)
+	}
+
+	// Create base filter for rating count
 	filter := bson.M{"rating_count": bson.M{"$gte": 5}}
+	
+	// Validate and add source filter if provided
 	if source != "" && source != "ALL" {
-		filter["source"] = source
+		validatedSource, err := validation.ValidateSource(source)
+		if err != nil {
+			return nil, fmt.Errorf("invalid source parameter: %w", err)
+		}
+		filter["source"] = validatedSource
 	}
 	
 	opts := options.Find().
 		SetSort(bson.D{{Key: "rating", Value: -1}}).
-		SetLimit(int64(limit))
+		SetLimit(int64(validatedLimit))
 
 	cursor, err := db.collection.Find(ctx, filter, opts)
 	if err != nil {
@@ -420,16 +488,23 @@ func (db *MongoDatabase) GetTrending(ctx context.Context, limit int, source stri
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	filter := bson.M{}
-	if source != "" && source != "ALL" {
-		filter["source"] = source
+	// Validate limit
+	validatedLimit, err := validation.ValidateLimit(limit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid limit: %w", err)
+	}
+
+	// Create safe filter using validation
+	filter, err := validation.CreateSafeFilter(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source parameter: %w", err)
 	}
 
 	// For now, return servers with most active installs
 	// TODO: Implement proper trending algorithm based on growth rate
 	opts := options.Find().
 		SetSort(bson.D{{Key: "active_installs", Value: -1}}).
-		SetLimit(int64(limit))
+		SetLimit(int64(validatedLimit))
 
 	cursor, err := db.collection.Find(ctx, filter, opts)
 	if err != nil {
@@ -453,8 +528,12 @@ func (db *MongoDatabase) GetGlobalStats(ctx context.Context, source string) (*Gl
 	// Build match stage for source filtering
 	pipeline := []bson.M{}
 	if source != "" && source != "ALL" {
+		validatedSource, err := validation.ValidateSource(source)
+		if err != nil {
+			return nil, fmt.Errorf("invalid source parameter: %w", err)
+		}
 		pipeline = append(pipeline, bson.M{
-			"$match": bson.M{"source": source},
+			"$match": bson.M{"source": validatedSource},
 		})
 	}
 

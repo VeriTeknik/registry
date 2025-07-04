@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/registry/internal/model"
+	"github.com/modelcontextprotocol/registry/internal/validation"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -166,12 +167,18 @@ func (db *MongoDB) GetByID(ctx context.Context, id string) (*model.ServerDetail,
 		return nil, ctx.Err()
 	}
 
+	// Validate and sanitize the ID
+	sanitizedID, err := validation.SanitizeID(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ID: %w", err)
+	}
+
 	// Create a filter for the ID
-	filter := bson.M{"id": id}
+	filter := bson.M{"id": sanitizedID}
 
 	// Find the entry in the database
 	var entry model.ServerDetail
-	err := db.collection.FindOne(ctx, filter).Decode(&entry)
+	err = db.collection.FindOne(ctx, filter).Decode(&entry)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, ErrNotFound
