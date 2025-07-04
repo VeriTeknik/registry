@@ -82,22 +82,15 @@ func (h *VPHandlers) ClaimServerHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Create new server entry
-	newServer := model.Server{
-		ID:          serverID, // Keep the same ID
-		Name:        claimReq.PublishRequest.Name,
-		Description: claimReq.PublishRequest.Description,
-		Repository:  claimReq.PublishRequest.Repository,
-		VersionDetail: model.VersionDetail{
-			Version:     claimReq.PublishRequest.VersionDetail.Version,
-			ReleaseDate: claimReq.PublishRequest.VersionDetail.ReleaseDate,
-			IsLatest:    claimReq.PublishRequest.VersionDetail.IsLatest,
-		},
-	}
-
-	// Create ServerDetail for publishing
+	// Create new server entry from publish request
 	newServerDetail := &model.ServerDetail{
-		Server:   newServer,
+		Server: model.Server{
+			ID:            serverID, // Keep the same ID
+			Name:          claimReq.PublishRequest.Name,
+			Description:   claimReq.PublishRequest.Description,
+			Repository:    claimReq.PublishRequest.Repository,
+			VersionDetail: claimReq.PublishRequest.VersionDetail,
+		},
 		Packages: claimReq.PublishRequest.Packages,
 		Remotes:  claimReq.PublishRequest.Remotes,
 	}
@@ -111,21 +104,27 @@ func (h *VPHandlers) ClaimServerHandler(w http.ResponseWriter, r *http.Request) 
 	// Handle stats transfer if requested
 	var transferredStats *stats.ServerStats
 	if claimReq.TransferStats {
-		// Get current stats
-		currentStats, err := h.statsDB.GetStats(r.Context(), serverID)
-		if err == nil && (currentStats.InstallationCount > 0 || currentStats.RatingCount > 0) {
-			transferredStats = currentStats
-			// Stats are preserved since we're keeping the same server ID
+		// Transfer stats from COMMUNITY to REGISTRY source
+		err := h.statsDB.TransferStats(r.Context(), serverID, serverID, stats.SourceCommunity, stats.SourceRegistry)
+		if err != nil {
+			// Log error but don't fail the claim
+			fmt.Printf("Failed to transfer stats during claim: %v\n", err)
+		} else {
+			// Get the transferred stats
+			transferredStats, _ = h.statsDB.GetStats(r.Context(), serverID, stats.SourceRegistry)
 		}
 	}
 
 	// Invalidate cache
 	h.statsCache.Delete(fmt.Sprintf("vp:server:%s", serverID))
+	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s", serverID))
+	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s:aggregated", serverID))
 	h.statsCache.Delete("vp:servers:")
+	h.statsCache.Delete("vp:stats:global")
 
-	// Get updated server with stats
-	serverStats, _ := h.statsDB.GetStats(r.Context(), serverID)
-	extendedServer := vpmodel.NewExtendedServer(&newServer, serverStats)
+	// Get updated server with stats from REGISTRY source
+	serverStats, _ := h.statsDB.GetStats(r.Context(), serverID, stats.SourceRegistry)
+	extendedServer := vpmodel.NewExtendedServer(&newServerDetail.Server, serverStats)
 
 	// Return success response
 	response := vpmodel.ClaimResponse{

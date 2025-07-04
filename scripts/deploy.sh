@@ -39,11 +39,13 @@ backup_current() {
     echo "📦 Creating backup of current deployment..."
     
     # Tag current images as backup
+    docker tag registry-extended:latest registry-extended:$BACKUP_TAG || true
     docker tag registry:latest registry:$BACKUP_TAG || true
     
     # Save current compose files
     cp docker-compose.yml docker-compose.yml.backup || true
     cp docker-compose.override.yml docker-compose.override.yml.backup || true
+    cp docker-compose.extended-override.yml docker-compose.extended-override.yml.backup || true
 }
 
 # Function to rollback
@@ -51,17 +53,19 @@ rollback() {
     echo "⚠️  Rolling back to previous version..."
     
     # Stop current containers
-    docker compose down
+    docker compose -f docker-compose.yml -f docker-compose.extended-override.yml down
     
     # Restore backup images
+    docker tag registry-extended:$BACKUP_TAG registry-extended:latest || true
     docker tag registry:$BACKUP_TAG registry:latest || true
     
     # Restore compose files
     mv docker-compose.yml.backup docker-compose.yml || true
     mv docker-compose.override.yml.backup docker-compose.override.yml || true
+    mv docker-compose.extended-override.yml.backup docker-compose.extended-override.yml || true
     
-    # Start services
-    docker compose up -d
+    # Start services with extended configuration
+    docker compose -f docker-compose.yml -f docker-compose.extended-override.yml up -d
     
     echo "✅ Rollback completed"
 }
@@ -74,16 +78,20 @@ main() {
     # Step 2: Pull latest changes
     echo "📥 Pulling latest configuration..."
     
-    # Step 3: Update Traefik if needed
+    # Step 3: Build extended image
+    echo "🔨 Building extended registry image..."
+    docker build -t registry-extended:latest -f Dockerfile .
+    
+    # Step 4: Update Traefik if needed
     echo "🔄 Updating Traefik..."
     docker compose -f docker-compose.proxy.yml up -d
     sleep 5
     
-    # Step 4: Deploy registry with rolling update
-    echo "🔄 Deploying registry service..."
+    # Step 5: Deploy registry with rolling update
+    echo "🔄 Deploying extended registry service with stats..."
     
-    # Use rolling update strategy with no-ports compose file
-    docker compose -f docker-compose-noports.yml -f docker-compose.override.yml up -d --no-deps --scale registry=2 registry
+    # Use extended configuration for deployment
+    docker compose -f docker-compose.yml -f docker-compose.extended-override.yml up -d --no-deps --scale registry=2 registry
     
     # Wait for new container to be healthy
     if ! check_health "registry"; then
@@ -92,18 +100,20 @@ main() {
         exit 1
     fi
     
-    # Step 5: Remove old container
+    # Step 6: Remove old container
     echo "🧹 Cleaning up old containers..."
-    docker compose -f docker-compose-noports.yml -f docker-compose.override.yml up -d --no-deps --scale registry=1 registry
+    docker compose -f docker-compose.yml -f docker-compose.extended-override.yml up -d --no-deps --scale registry=1 registry
     
-    # Step 6: Clean up backup images (keep last 3)
+    # Step 7: Clean up backup images (keep last 3)
     echo "🧹 Cleaning up old backup images..."
+    docker images | grep "registry-extended.*backup-" | tail -n +4 | awk '{print $2}' | xargs -r docker rmi registry-extended: || true
     docker images | grep "registry.*backup-" | tail -n +4 | awk '{print $2}' | xargs -r docker rmi registry: || true
     
-    # Step 7: Prune unused resources
+    # Step 8: Prune unused resources
     docker system prune -f --volumes
     
     echo "✅ Deployment completed successfully!"
+    echo "📊 Stats endpoints available at: https://registry.plugged.in/vp/*"
 }
 
 # Trap errors and rollback if needed

@@ -4,9 +4,16 @@ import (
 	"time"
 )
 
+// Source types for server stats
+const (
+	SourceRegistry  = "REGISTRY"
+	SourceCommunity = "COMMUNITY"
+)
+
 // ServerStats represents statistics for a single server
 type ServerStats struct {
 	ServerID          string    `json:"server_id" bson:"server_id"`
+	Source            string    `json:"source" bson:"source"` // REGISTRY or COMMUNITY
 	InstallationCount int       `json:"installation_count" bson:"installation_count"`
 	Rating            float64   `json:"rating" bson:"rating"`
 	RatingCount       int       `json:"rating_count" bson:"rating_count"`
@@ -16,15 +23,21 @@ type ServerStats struct {
 	ActiveInstalls     int `json:"active_installs,omitempty" bson:"active_installs,omitempty"`
 	DailyActiveUsers   int `json:"daily_active_users,omitempty" bson:"daily_active_users,omitempty"`
 	MonthlyActiveUsers int `json:"monthly_active_users,omitempty" bson:"monthly_active_users,omitempty"`
+
+	// For claimed servers, track the original source
+	ClaimedFrom string    `json:"claimed_from,omitempty" bson:"claimed_from,omitempty"`
+	ClaimedAt   time.Time `json:"claimed_at,omitempty" bson:"claimed_at,omitempty"`
 }
 
 // RatingRequest represents a request to submit a rating
 type RatingRequest struct {
 	Rating float64 `json:"rating" validate:"required,min=1,max=5"`
+	Source string  `json:"source,omitempty"` // REGISTRY or COMMUNITY, defaults to REGISTRY
 }
 
 // InstallRequest represents an installation tracking request
 type InstallRequest struct {
+	Source    string `json:"source,omitempty"` // REGISTRY or COMMUNITY, defaults to REGISTRY
 	UserID    string `json:"user_id,omitempty"`
 	Version   string `json:"version,omitempty"`
 	Platform  string `json:"platform,omitempty"`
@@ -96,4 +109,22 @@ type StatsUpdateRequest struct {
 // BatchStatsResponse represents multiple server stats
 type BatchStatsResponse struct {
 	Stats map[string]*ServerStats `json:"stats"`
+}
+
+// StatsTransferRequest represents a request to transfer stats during claiming
+type StatsTransferRequest struct {
+	FromServerID string `json:"from_server_id"`
+	ToServerID   string `json:"to_server_id"`
+	FromSource   string `json:"from_source"`
+	ToSource     string `json:"to_source"`
+}
+
+// AggregatedStats represents combined stats from multiple sources
+type AggregatedStats struct {
+	ServerID          string              `json:"server_id"`
+	TotalInstalls     int                 `json:"total_installs"`
+	AverageRating     float64             `json:"average_rating"`
+	TotalRatingCount  int                 `json:"total_rating_count"`
+	SourceBreakdown   map[string]*ServerStats `json:"source_breakdown"`
+	LastUpdated       time.Time           `json:"last_updated"`
 }

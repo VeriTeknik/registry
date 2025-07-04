@@ -18,24 +18,29 @@ const (
 
 // Database interface defines stats database operations
 type Database interface {
-	// Stats operations
-	GetStats(ctx context.Context, serverID string) (*ServerStats, error)
-	GetBatchStats(ctx context.Context, serverIDs []string) (map[string]*ServerStats, error)
+	// Stats operations with source support
+	GetStats(ctx context.Context, serverID string, source string) (*ServerStats, error)
+	GetStatsByServerID(ctx context.Context, serverID string) ([]*ServerStats, error)
+	GetBatchStats(ctx context.Context, serverIDs []string, source string) (map[string]*ServerStats, error)
+	GetAggregatedStats(ctx context.Context, serverID string) (*AggregatedStats, error)
 	UpsertStats(ctx context.Context, stats *ServerStats) error
-	IncrementInstallCount(ctx context.Context, serverID string) error
-	UpdateRating(ctx context.Context, serverID string, rating float64) error
+	IncrementInstallCount(ctx context.Context, serverID string, source string) error
+	UpdateRating(ctx context.Context, serverID string, source string, rating float64) error
 	
-	// Leaderboard operations
-	GetTopByInstalls(ctx context.Context, limit int) ([]*ServerStats, error)
-	GetTopByRating(ctx context.Context, limit int) ([]*ServerStats, error)
-	GetTrending(ctx context.Context, limit int) ([]*ServerStats, error)
+	// Leaderboard operations with source support
+	GetTopByInstalls(ctx context.Context, limit int, source string) ([]*ServerStats, error)
+	GetTopByRating(ctx context.Context, limit int, source string) ([]*ServerStats, error)
+	GetTrending(ctx context.Context, limit int, source string) ([]*ServerStats, error)
 	
-	// Global stats
-	GetGlobalStats(ctx context.Context) (*GlobalStats, error)
+	// Global stats with source support
+	GetGlobalStats(ctx context.Context, source string) (*GlobalStats, error)
 	
 	// Bulk operations
 	SyncAnalyticsData(ctx context.Context, updates []StatsUpdateRequest) error
-	TransferStats(ctx context.Context, fromServerID, toServerID string) error
+	TransferStats(ctx context.Context, fromServerID, toServerID, fromSource, toSource string) error
+	
+	// Migration
+	MigrateExistingStats(ctx context.Context) error
 }
 
 // MongoDatabase implements Database interface using MongoDB
@@ -60,9 +65,23 @@ func NewMongoDatabase(client *mongo.Client, databaseName string) (*MongoDatabase
 	defer cancel()
 
 	indexes := []mongo.IndexModel{
+		// Compound unique index on server_id + source
 		{
-			Keys:    bson.D{{Key: "server_id", Value: 1}},
+			Keys:    bson.D{{Key: "server_id", Value: 1}, {Key: "source", Value: 1}},
 			Options: options.Index().SetUnique(true),
+		},
+		// Keep simple server_id index for backward compatibility
+		{
+			Keys: bson.D{{Key: "server_id", Value: 1}},
+		},
+		{
+			Keys: bson.D{{Key: "source", Value: 1}},
+		},
+		{
+			Keys: bson.D{{Key: "source", Value: 1}, {Key: "installation_count", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "source", Value: 1}, {Key: "rating", Value: -1}},
 		},
 		{
 			Keys: bson.D{{Key: "installation_count", Value: -1}},
@@ -90,18 +109,29 @@ func NewMongoDatabase(client *mongo.Client, databaseName string) (*MongoDatabase
 	}, nil
 }
 
-// GetStats retrieves stats for a single server
-func (db *MongoDatabase) GetStats(ctx context.Context, serverID string) (*ServerStats, error) {
+// GetStats retrieves stats for a single server with specific source
+func (db *MongoDatabase) GetStats(ctx context.Context, serverID string, source string) (*ServerStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	// Default to REGISTRY if source not specified
+	if source == "" {
+		source = SourceRegistry
+	}
+
 	var stats ServerStats
-	err := db.collection.FindOne(ctx, bson.M{"server_id": serverID}).Decode(&stats)
+	filter := bson.M{
+		"server_id": serverID,
+		"source":    source,
+	}
+	
+	err := db.collection.FindOne(ctx, filter).Decode(&stats)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// Return empty stats if none exist
 			return &ServerStats{
 				ServerID:          serverID,
+				Source:            source,
 				InstallationCount: 0,
 				Rating:            0,
 				RatingCount:       0,
@@ -114,12 +144,41 @@ func (db *MongoDatabase) GetStats(ctx context.Context, serverID string) (*Server
 	return &stats, nil
 }
 
-// GetBatchStats retrieves stats for multiple servers
-func (db *MongoDatabase) GetBatchStats(ctx context.Context, serverIDs []string) (map[string]*ServerStats, error) {
+// GetStatsByServerID retrieves all stats entries for a server (all sources)
+func (db *MongoDatabase) GetStatsByServerID(ctx context.Context, serverID string) ([]*ServerStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	filter := bson.M{"server_id": bson.M{"$in": serverIDs}}
+	filter := bson.M{"server_id": serverID}
+	cursor, err := db.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stats by server ID: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var results []*ServerStats
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, fmt.Errorf("failed to decode stats: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetBatchStats retrieves stats for multiple servers with specific source
+func (db *MongoDatabase) GetBatchStats(ctx context.Context, serverIDs []string, source string) (map[string]*ServerStats, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	// Default to REGISTRY if source not specified
+	if source == "" {
+		source = SourceRegistry
+	}
+
+	filter := bson.M{
+		"server_id": bson.M{"$in": serverIDs},
+		"source":    source,
+	}
+	
 	cursor, err := db.collection.Find(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get batch stats: %w", err)
@@ -140,6 +199,7 @@ func (db *MongoDatabase) GetBatchStats(ctx context.Context, serverIDs []string) 
 		if _, exists := result[serverID]; !exists {
 			result[serverID] = &ServerStats{
 				ServerID:          serverID,
+				Source:            source,
 				InstallationCount: 0,
 				Rating:            0,
 				RatingCount:       0,
@@ -151,14 +211,66 @@ func (db *MongoDatabase) GetBatchStats(ctx context.Context, serverIDs []string) 
 	return result, nil
 }
 
+// GetAggregatedStats retrieves combined stats from all sources for a server
+func (db *MongoDatabase) GetAggregatedStats(ctx context.Context, serverID string) (*AggregatedStats, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	// Get all stats for this server
+	allStats, err := db.GetStatsByServerID(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(allStats) == 0 {
+		return &AggregatedStats{
+			ServerID:         serverID,
+			TotalInstalls:    0,
+			AverageRating:    0,
+			TotalRatingCount: 0,
+			SourceBreakdown:  make(map[string]*ServerStats),
+			LastUpdated:      time.Now(),
+		}, nil
+	}
+
+	// Aggregate the stats
+	aggregated := &AggregatedStats{
+		ServerID:        serverID,
+		SourceBreakdown: make(map[string]*ServerStats),
+		LastUpdated:     time.Now(),
+	}
+
+	totalRating := float64(0)
+	for _, stats := range allStats {
+		aggregated.TotalInstalls += stats.InstallationCount
+		aggregated.TotalRatingCount += stats.RatingCount
+		totalRating += stats.Rating * float64(stats.RatingCount)
+		aggregated.SourceBreakdown[stats.Source] = stats
+	}
+
+	if aggregated.TotalRatingCount > 0 {
+		aggregated.AverageRating = totalRating / float64(aggregated.TotalRatingCount)
+	}
+
+	return aggregated, nil
+}
+
 // UpsertStats creates or updates server stats
 func (db *MongoDatabase) UpsertStats(ctx context.Context, stats *ServerStats) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Default to REGISTRY if source not specified
+	if stats.Source == "" {
+		stats.Source = SourceRegistry
+	}
+
 	stats.LastUpdated = time.Now()
 	
-	filter := bson.M{"server_id": stats.ServerID}
+	filter := bson.M{
+		"server_id": stats.ServerID,
+		"source":    stats.Source,
+	}
 	update := bson.M{"$set": stats}
 	opts := options.Update().SetUpsert(true)
 
@@ -171,14 +283,25 @@ func (db *MongoDatabase) UpsertStats(ctx context.Context, stats *ServerStats) er
 }
 
 // IncrementInstallCount atomically increments the installation count
-func (db *MongoDatabase) IncrementInstallCount(ctx context.Context, serverID string) error {
+func (db *MongoDatabase) IncrementInstallCount(ctx context.Context, serverID string, source string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	filter := bson.M{"server_id": serverID}
+	// Default to REGISTRY if source not specified
+	if source == "" {
+		source = SourceRegistry
+	}
+
+	filter := bson.M{
+		"server_id": serverID,
+		"source":    source,
+	}
 	update := bson.M{
 		"$inc": bson.M{"installation_count": 1},
-		"$set": bson.M{"last_updated": time.Now()},
+		"$set": bson.M{
+			"last_updated": time.Now(),
+			"source":       source,
+		},
 	}
 	opts := options.Update().SetUpsert(true)
 
@@ -191,13 +314,23 @@ func (db *MongoDatabase) IncrementInstallCount(ctx context.Context, serverID str
 }
 
 // UpdateRating updates the rating for a server
-func (db *MongoDatabase) UpdateRating(ctx context.Context, serverID string, newRating float64) error {
+func (db *MongoDatabase) UpdateRating(ctx context.Context, serverID string, source string, newRating float64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Default to REGISTRY if source not specified
+	if source == "" {
+		source = SourceRegistry
+	}
+
 	// First get current stats to calculate new average
 	var current ServerStats
-	err := db.collection.FindOne(ctx, bson.M{"server_id": serverID}).Decode(&current)
+	filter := bson.M{
+		"server_id": serverID,
+		"source":    source,
+	}
+	
+	err := db.collection.FindOne(ctx, filter).Decode(&current)
 	if err != nil && err != mongo.ErrNoDocuments {
 		return fmt.Errorf("failed to get current stats: %w", err)
 	}
@@ -207,12 +340,12 @@ func (db *MongoDatabase) UpdateRating(ctx context.Context, serverID string, newR
 	newRatingCount := current.RatingCount + 1
 	newAvgRating := (totalRating + newRating) / float64(newRatingCount)
 
-	filter := bson.M{"server_id": serverID}
 	update := bson.M{
 		"$set": bson.M{
 			"rating":       newAvgRating,
 			"rating_count": newRatingCount,
 			"last_updated": time.Now(),
+			"source":       source,
 		},
 	}
 	opts := options.Update().SetUpsert(true)
@@ -226,15 +359,20 @@ func (db *MongoDatabase) UpdateRating(ctx context.Context, serverID string, newR
 }
 
 // GetTopByInstalls returns servers with highest installation counts
-func (db *MongoDatabase) GetTopByInstalls(ctx context.Context, limit int) ([]*ServerStats, error) {
+func (db *MongoDatabase) GetTopByInstalls(ctx context.Context, limit int, source string) ([]*ServerStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+
+	filter := bson.M{}
+	if source != "" && source != "ALL" {
+		filter["source"] = source
+	}
 
 	opts := options.Find().
 		SetSort(bson.D{{Key: "installation_count", Value: -1}}).
 		SetLimit(int64(limit))
 
-	cursor, err := db.collection.Find(ctx, bson.M{}, opts)
+	cursor, err := db.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get top by installs: %w", err)
 	}
@@ -249,12 +387,16 @@ func (db *MongoDatabase) GetTopByInstalls(ctx context.Context, limit int) ([]*Se
 }
 
 // GetTopByRating returns servers with highest ratings
-func (db *MongoDatabase) GetTopByRating(ctx context.Context, limit int) ([]*ServerStats, error) {
+func (db *MongoDatabase) GetTopByRating(ctx context.Context, limit int, source string) ([]*ServerStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	// Only include servers with at least 5 ratings
 	filter := bson.M{"rating_count": bson.M{"$gte": 5}}
+	if source != "" && source != "ALL" {
+		filter["source"] = source
+	}
+	
 	opts := options.Find().
 		SetSort(bson.D{{Key: "rating", Value: -1}}).
 		SetLimit(int64(limit))
@@ -274,9 +416,14 @@ func (db *MongoDatabase) GetTopByRating(ctx context.Context, limit int) ([]*Serv
 }
 
 // GetTrending returns trending servers based on recent growth
-func (db *MongoDatabase) GetTrending(ctx context.Context, limit int) ([]*ServerStats, error) {
+func (db *MongoDatabase) GetTrending(ctx context.Context, limit int, source string) ([]*ServerStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+
+	filter := bson.M{}
+	if source != "" && source != "ALL" {
+		filter["source"] = source
+	}
 
 	// For now, return servers with most active installs
 	// TODO: Implement proper trending algorithm based on growth rate
@@ -284,7 +431,7 @@ func (db *MongoDatabase) GetTrending(ctx context.Context, limit int) ([]*ServerS
 		SetSort(bson.D{{Key: "active_installs", Value: -1}}).
 		SetLimit(int64(limit))
 
-	cursor, err := db.collection.Find(ctx, bson.M{}, opts)
+	cursor, err := db.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trending: %w", err)
 	}
@@ -299,22 +446,29 @@ func (db *MongoDatabase) GetTrending(ctx context.Context, limit int) ([]*ServerS
 }
 
 // GetGlobalStats returns aggregate statistics for all servers
-func (db *MongoDatabase) GetGlobalStats(ctx context.Context) (*GlobalStats, error) {
+func (db *MongoDatabase) GetGlobalStats(ctx context.Context, source string) (*GlobalStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	pipeline := []bson.M{
-		{
-			"$group": bson.M{
-				"_id":              nil,
-				"total_servers":    bson.M{"$sum": 1},
-				"total_installs":   bson.M{"$sum": "$installation_count"},
-				"active_servers":   bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$gt": bson.A{"$active_installs", 0}}, 1, 0}}},
-				"total_rating":     bson.M{"$sum": bson.M{"$multiply": bson.A{"$rating", "$rating_count"}}},
-				"total_ratings":    bson.M{"$sum": "$rating_count"},
-			},
-		},
+	// Build match stage for source filtering
+	pipeline := []bson.M{}
+	if source != "" && source != "ALL" {
+		pipeline = append(pipeline, bson.M{
+			"$match": bson.M{"source": source},
+		})
 	}
+
+	// Add aggregation stage
+	pipeline = append(pipeline, bson.M{
+		"$group": bson.M{
+			"_id":              nil,
+			"total_servers":    bson.M{"$sum": 1},
+			"total_installs":   bson.M{"$sum": "$installation_count"},
+			"active_servers":   bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$gt": bson.A{"$active_installs", 0}}, 1, 0}}},
+			"total_rating":     bson.M{"$sum": bson.M{"$multiply": bson.A{"$rating", "$rating_count"}}},
+			"total_ratings":    bson.M{"$sum": "$rating_count"},
+		},
+	})
 
 	cursor, err := db.collection.Aggregate(ctx, pipeline)
 	if err != nil {
@@ -387,13 +541,25 @@ func (db *MongoDatabase) SyncAnalyticsData(ctx context.Context, updates []StatsU
 }
 
 // TransferStats transfers stats from one server to another (for claiming)
-func (db *MongoDatabase) TransferStats(ctx context.Context, fromServerID, toServerID string) error {
+func (db *MongoDatabase) TransferStats(ctx context.Context, fromServerID, toServerID, fromSource, toSource string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Default sources
+	if fromSource == "" {
+		fromSource = SourceCommunity
+	}
+	if toSource == "" {
+		toSource = SourceRegistry
+	}
+
 	// Get source stats
 	var sourceStats ServerStats
-	err := db.collection.FindOne(ctx, bson.M{"server_id": fromServerID}).Decode(&sourceStats)
+	sourceFilter := bson.M{
+		"server_id": fromServerID,
+		"source":    fromSource,
+	}
+	err := db.collection.FindOne(ctx, sourceFilter).Decode(&sourceStats)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// No stats to transfer
@@ -402,41 +568,94 @@ func (db *MongoDatabase) TransferStats(ctx context.Context, fromServerID, toServ
 		return fmt.Errorf("failed to get source stats: %w", err)
 	}
 
-	// Update target stats
-	filter := bson.M{"server_id": toServerID}
-	update := bson.M{
-		"$inc": bson.M{
-			"installation_count": sourceStats.InstallationCount,
-			"rating_count":       sourceStats.RatingCount,
-		},
+	// Get target stats if they exist
+	targetFilter := bson.M{
+		"server_id": toServerID,
+		"source":    toSource,
+	}
+	var targetStats ServerStats
+	targetExists := true
+	err = db.collection.FindOne(ctx, targetFilter).Decode(&targetStats)
+	if err == mongo.ErrNoDocuments {
+		targetExists = false
+	} else if err != nil {
+		return fmt.Errorf("failed to get target stats: %w", err)
+	}
+
+	// Calculate merged stats
+	var newStats ServerStats
+	if targetExists {
+		// Merge stats
+		newStats = ServerStats{
+			ServerID:          toServerID,
+			Source:            toSource,
+			InstallationCount: targetStats.InstallationCount + sourceStats.InstallationCount,
+			RatingCount:       targetStats.RatingCount + sourceStats.RatingCount,
+			LastUpdated:       time.Now(),
+		}
+		
+		// Calculate weighted average rating
+		if newStats.RatingCount > 0 {
+			totalRating := (targetStats.Rating * float64(targetStats.RatingCount)) +
+				(sourceStats.Rating * float64(sourceStats.RatingCount))
+			newStats.Rating = totalRating / float64(newStats.RatingCount)
+		}
+		
+		// Preserve analytics metrics from target
+		newStats.ActiveInstalls = targetStats.ActiveInstalls
+		newStats.DailyActiveUsers = targetStats.DailyActiveUsers
+		newStats.MonthlyActiveUsers = targetStats.MonthlyActiveUsers
+	} else {
+		// Copy source stats to target with new source
+		newStats = sourceStats
+		newStats.ServerID = toServerID
+		newStats.Source = toSource
+		newStats.LastUpdated = time.Now()
+	}
+
+	// Add claim tracking
+	newStats.ClaimedFrom = fromSource
+	newStats.ClaimedAt = time.Now()
+
+	// Upsert the new stats
+	if err := db.UpsertStats(ctx, &newStats); err != nil {
+		return fmt.Errorf("failed to upsert transferred stats: %w", err)
+	}
+
+	// Mark source stats as claimed (don't delete for audit trail)
+	claimUpdate := bson.M{
 		"$set": bson.M{
+			"claimed_at": time.Now(),
+			"claimed_to": toServerID,
+		},
+	}
+	_, err = db.collection.UpdateOne(ctx, sourceFilter, claimUpdate)
+	if err != nil {
+		// Log but don't fail the transfer
+		fmt.Printf("Failed to mark source stats as claimed: %v\n", err)
+	}
+
+	return nil
+}
+
+// MigrateExistingStats adds source field to existing stats entries
+func (db *MongoDatabase) MigrateExistingStats(ctx context.Context) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Update all documents without a source field to have source=REGISTRY
+	filter := bson.M{"source": bson.M{"$exists": false}}
+	update := bson.M{
+		"$set": bson.M{
+			"source": SourceRegistry,
 			"last_updated": time.Now(),
 		},
 	}
 
-	// Calculate new average rating if target has existing ratings
-	var targetStats ServerStats
-	err = db.collection.FindOne(ctx, filter).Decode(&targetStats)
-	if err == nil && targetStats.RatingCount > 0 {
-		// Weighted average of ratings
-		totalRating := (targetStats.Rating * float64(targetStats.RatingCount)) + 
-			(sourceStats.Rating * float64(sourceStats.RatingCount))
-		totalCount := targetStats.RatingCount + sourceStats.RatingCount
-		newRating := totalRating / float64(totalCount)
-		update["$set"].(bson.M)["rating"] = newRating
-	} else {
-		// Just use source rating if no existing rating
-		update["$set"].(bson.M)["rating"] = sourceStats.Rating
-	}
-
-	opts := options.Update().SetUpsert(true)
-	_, err = db.collection.UpdateOne(ctx, filter, update, opts)
+	_, err := db.collection.UpdateMany(ctx, filter, update)
 	if err != nil {
-		return fmt.Errorf("failed to transfer stats: %w", err)
+		return fmt.Errorf("failed to migrate existing stats: %w", err)
 	}
-
-	// Optionally delete source stats
-	// _, err = db.collection.DeleteOne(ctx, bson.M{"server_id": fromServerID})
 
 	return nil
 }

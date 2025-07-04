@@ -2,6 +2,7 @@ package vp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +28,12 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	statsDB, err := stats.NewMongoDatabase(config.MongoClient, config.DatabaseName)
 	if err != nil {
 		return err
+	}
+
+	// Run migration to add source field to existing stats
+	if err := statsDB.MigrateExistingStats(context.Background()); err != nil {
+		// Log error but don't fail startup
+		fmt.Printf("Warning: Failed to migrate existing stats: %v\n", err)
 	}
 
 	// Initialize cache service

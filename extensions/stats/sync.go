@@ -154,7 +154,8 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID string) error {
 	}
 	
 	// Get current stats to preserve installation count and ratings
-	currentStats, err := s.statsDB.GetStats(ctx, serverID)
+	// For analytics sync, we always update the REGISTRY source
+	currentStats, err := s.statsDB.GetStats(ctx, serverID, SourceRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to get current stats: %w", err)
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
@@ -30,12 +32,37 @@ func NewVPHandlers(service service.RegistryService, statsDB stats.Database, stat
 
 // GetServersHandler returns a list of servers with stats included
 func (h *VPHandlers) GetServersHandler(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	sortBy := r.URL.Query().Get("sort")
+	source := r.URL.Query().Get("source")
+	limitStr := r.URL.Query().Get("limit")
+	
+	// Validate source
+	if source != "" && source != stats.SourceRegistry && source != stats.SourceCommunity {
+		http.Error(w, "Invalid source. Must be 'REGISTRY' or 'COMMUNITY'", http.StatusBadRequest)
+		return
+	}
+
+	// Parse limit
+	limit := 100
+	if limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 && parsedLimit <= 1000 {
+			limit = parsedLimit
+		}
+	}
+
 	// Check cache first
 	cacheKey := "vp:servers:" + r.URL.Query().Encode()
 	if cached, found := h.statsCache.Get(cacheKey); found {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache", "HIT")
 		json.NewEncoder(w).Encode(cached)
+		return
+	}
+
+	// Handle sorted requests differently
+	if sortBy != "" {
+		h.handleSortedServers(w, r, sortBy, source, limit, cacheKey)
 		return
 	}
 
@@ -59,8 +86,8 @@ func (h *VPHandlers) GetServersHandler(w http.ResponseWriter, r *http.Request) {
 		serverIDs[i] = server.ID
 	}
 
-	// Get stats for all servers
-	statsMap, err := h.statsDB.GetBatchStats(r.Context(), serverIDs)
+	// Get stats for all servers with source if specified
+	statsMap, err := h.statsDB.GetBatchStats(r.Context(), serverIDs, source)
 	if err != nil {
 		// Log error but continue without stats
 		fmt.Printf("Failed to get stats: %v\n", err)
@@ -115,12 +142,19 @@ func (h *VPHandlers) GetServerByIDHandler(w http.ResponseWriter, r *http.Request
 	// ServerDetail already contains Server
 	server := &serverDetail.Server
 
+	// Get source from query params
+	source := r.URL.Query().Get("source")
+	if source != "" && source != stats.SourceRegistry && source != stats.SourceCommunity {
+		http.Error(w, "Invalid source. Must be 'REGISTRY' or 'COMMUNITY'", http.StatusBadRequest)
+		return
+	}
+
 	// Get stats for the server
-	serverStats, err := h.statsDB.GetStats(r.Context(), serverID)
+	serverStats, err := h.statsDB.GetStats(r.Context(), serverID, source)
 	if err != nil {
 		// Log error but continue without stats
 		fmt.Printf("Failed to get stats for server %s: %v\n", serverID, err)
-		serverStats = &stats.ServerStats{ServerID: serverID}
+		serverStats = &stats.ServerStats{ServerID: serverID, Source: source}
 	}
 
 	// Create extended server response
@@ -149,4 +183,77 @@ func convertToServerPointers(servers []model.Server) []*model.Server {
 		result[i] = &servers[i]
 	}
 	return result
+}
+
+// handleSortedServers handles server requests with sorting
+func (h *VPHandlers) handleSortedServers(w http.ResponseWriter, r *http.Request, sortBy, source string, limit int, cacheKey string) {
+	var sortedStats []*stats.ServerStats
+	var err error
+
+	// Get sorted stats based on sort parameter
+	switch sortBy {
+	case "installs":
+		sortedStats, err = h.statsDB.GetTopByInstalls(r.Context(), limit, source)
+	case "rating":
+		sortedStats, err = h.statsDB.GetTopByRating(r.Context(), limit, source)
+	case "trending":
+		sortedStats, err = h.statsDB.GetTrending(r.Context(), limit, source)
+	default:
+		http.Error(w, "Invalid sort parameter. Must be 'installs', 'rating', or 'trending'", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get sorted servers: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get server details for the sorted servers
+	servers := make([]*model.Server, 0, len(sortedStats))
+	statsMap := make(map[string]*stats.ServerStats)
+	
+	for _, stat := range sortedStats {
+		statsMap[stat.ServerID] = stat
+		
+		// Get server details
+		serverDetail, err := h.service.GetByID(stat.ServerID)
+		if err != nil {
+			// Skip servers that can't be found
+			continue
+		}
+		servers = append(servers, &serverDetail.Server)
+	}
+
+	// Create extended servers response
+	extendedServers := vpmodel.NewExtendedServers(servers, statsMap)
+
+	// Sort extended servers to maintain the order from stats query
+	sort.Slice(extendedServers, func(i, j int) bool {
+		switch sortBy {
+		case "installs":
+			return extendedServers[i].InstallationCount > extendedServers[j].InstallationCount
+		case "rating":
+			return extendedServers[i].Rating > extendedServers[j].Rating
+		case "trending":
+			// Trending is already sorted by the database query
+			return false
+		default:
+			return false
+		}
+	})
+
+	response := vpmodel.ExtendedServersResponse{
+		Servers: extendedServers,
+	}
+
+	// Cache the response
+	h.statsCache.Set(cacheKey, response)
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache", "MISS")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
 }
