@@ -4,7 +4,7 @@ This directory contains extensions to the MCP Registry that add additional funct
 
 ## /vp API Extension
 
-The `/vp` (v-plugged) API provides enhanced filtering capabilities for the registry endpoints.
+The `/vp` (v-plugged) API provides enhanced filtering capabilities and statistics tracking for the registry endpoints.
 
 ### Endpoints
 
@@ -78,17 +78,179 @@ if descriptions, ok := queryParams["description"]; ok && len(descriptions) > 0 {
 }
 ```
 
+## Stats Extension
+
+The stats extension adds installation tracking, ratings, and analytics integration to the registry.
+
+### Stats Endpoints
+
+#### POST /vp/servers/{id}/install
+Track an installation for a server.
+
+**Request Body (optional):**
+```json
+{
+  "user_id": "user123",
+  "version": "1.2.0",
+  "platform": "macos",
+  "timestamp": 1234567890
+}
+```
+
+#### POST /vp/servers/{id}/rate
+Submit a rating for a server.
+
+**Request Body:**
+```json
+{
+  "rating": 4.5
+}
+```
+
+#### GET /vp/servers/{id}/stats
+Get statistics for a specific server.
+
+**Response:**
+```json
+{
+  "stats": {
+    "server_id": "example-server",
+    "installation_count": 1234,
+    "rating": 4.5,
+    "rating_count": 78,
+    "active_installs": 890,
+    "daily_active_users": 456,
+    "monthly_active_users": 789
+  }
+}
+```
+
+#### GET /vp/stats/global
+Get global registry statistics.
+
+**Response:**
+```json
+{
+  "total_servers": 250,
+  "total_installs": 50000,
+  "active_servers": 180,
+  "average_rating": 4.2
+}
+```
+
+#### GET /vp/stats/leaderboard
+Get leaderboard data.
+
+**Query Parameters:**
+- `type`: Leaderboard type (installs, rating, trending)
+- `limit`: Number of results (default 10, max 100)
+
+#### GET /vp/stats/trending
+Get trending servers.
+
+**Query Parameters:**
+- `limit`: Number of results (default 20, max 100)
+
+### Server Claiming
+
+#### POST /vp/servers/{id}/claim
+Claim a community server and transfer its stats.
+
+**Request Body:**
+```json
+{
+  "publish_request": {
+    "name": "My Server",
+    "description": "Server description",
+    "repository": {
+      "owner": "myusername",
+      "name": "myrepo"
+    },
+    "schema_version": "1.0.0",
+    "install_type": "npm",
+    "install_url": "mypackage",
+    "transport": ["stdio"]
+  },
+  "transfer_stats": true
+}
+```
+
+### Enhanced Server Responses
+
+All `/vp/servers` endpoints now include statistics in their responses:
+
+```json
+{
+  "servers": [
+    {
+      "id": "example-server",
+      "name": "Example Server",
+      "description": "...",
+      "repository": {...},
+      "version_detail": {...},
+      "installation_count": 1234,
+      "rating": 4.5,
+      "rating_count": 78,
+      "active_installs": 890,
+      "weekly_growth": 12.5
+    }
+  ]
+}
+```
+
 ### Architecture
 
 ```
 extensions/
+├── stats/
+│   ├── model.go                # Stats data models
+│   ├── database.go             # MongoDB operations for stats
+│   └── sync.go                 # Analytics sync service
 ├── vp/
+│   ├── model/
+│   │   ├── extended_server.go  # Server model with stats
+│   │   └── claim.go            # Claim request models
 │   ├── handlers/
-│   │   ├── servers.go          # Filtering logic
-│   │   └── service_extension.go # Service layer extensions
+│   │   ├── servers.go          # Enhanced server endpoints
+│   │   ├── stats.go            # Stats-specific endpoints
+│   │   └── claim.go            # Server claiming endpoint
 │   └── router.go               # Route registration
-├── router_with_vp.go           # Extended router
+├── router_with_vp.go           # Extended router setup
 ├── main_with_extensions.go     # Extended main entry point
 ├── Dockerfile                  # Docker build for extended version
 └── README.md                   # This file
 ```
+
+### Database Schema
+
+The stats extension uses a separate `server_stats` collection in MongoDB:
+
+```javascript
+{
+  "server_id": "unique-server-id",
+  "installation_count": 1234,
+  "rating": 4.5,
+  "rating_count": 78,
+  "active_installs": 890,
+  "daily_active_users": 456,
+  "monthly_active_users": 789,
+  "last_updated": "2024-01-01T00:00:00Z"
+}
+```
+
+### Analytics Integration
+
+The stats extension integrates with the analytics service at `https://analytics.plugged.in`:
+- Syncs active user metrics every 15 minutes
+- Provides real-time installation and rating tracking
+- Calculates trending servers based on growth metrics
+
+### Caching
+
+Stats responses are cached for 5 minutes using an in-memory cache:
+- Individual server stats
+- Global statistics
+- Leaderboards
+- Trending servers
+
+Cache is automatically invalidated when stats are updated.

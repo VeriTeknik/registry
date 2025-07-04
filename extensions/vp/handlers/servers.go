@@ -2,203 +2,186 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
-	"strconv"
+	"strings"
 
-	"github.com/google/uuid"
-	"github.com/modelcontextprotocol/registry/internal/model"
+	"github.com/modelcontextprotocol/registry/extensions/stats"
+	"github.com/modelcontextprotocol/registry/extensions/vp/model"
 	"github.com/modelcontextprotocol/registry/internal/service"
+	"github.com/modelcontextprotocol/registry/internal/types"
 )
 
-// PaginatedResponse is a paginated API response with filtering
-type PaginatedResponse struct {
-	Data     []model.Server `json:"servers"`
-	Metadata Metadata       `json:"metadata,omitempty"`
+// VPHandlers contains the handlers for VP (v-plugged) endpoints
+type VPHandlers struct {
+	service      *service.Service
+	statsDB      stats.Database
+	statsCache   *stats.CacheService
 }
 
-// Metadata contains pagination metadata
-type Metadata struct {
-	NextCursor string `json:"next_cursor,omitempty"`
-	Count      int    `json:"count,omitempty"`
-	Total      int    `json:"total,omitempty"`
+// NewVPHandlers creates a new instance of VPHandlers
+func NewVPHandlers(service *service.Service, statsDB stats.Database, statsCache *stats.CacheService) *VPHandlers {
+	return &VPHandlers{
+		service:    service,
+		statsDB:    statsDB,
+		statsCache: statsCache,
+	}
 }
 
-// ServersHandler returns a handler for listing registry items with filtering support
-func ServersHandler(registry service.RegistryService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("VP ServersHandler called with URL: %s", r.URL.String())
-		
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Parse query parameters
-		queryParams := r.URL.Query()
-		
-		// Parse cursor and limit from query parameters
-		cursor := queryParams.Get("cursor")
-		if cursor != "" {
-			_, err := uuid.Parse(cursor)
-			if err != nil {
-				http.Error(w, "Invalid cursor parameter", http.StatusBadRequest)
-				return
-			}
-		}
-		
-		limitStr := queryParams.Get("limit")
-		limit := 30 // Default limit
-		
-		if limitStr != "" {
-			parsedLimit, err := strconv.Atoi(limitStr)
-			if err != nil {
-				http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
-				return
-			}
-			
-			if parsedLimit <= 0 {
-				http.Error(w, "Limit must be greater than 0", http.StatusBadRequest)
-				return
-			}
-			
-			if parsedLimit > 100 {
-				limit = 100 // Cap maximum limit
-			} else {
-				limit = parsedLimit
-			}
-		}
-
-		// Build filter map from query parameters
-		filters := buildFilters(r.URL.Query())
-		log.Printf("VP Servers: Filters = %+v", filters)
-
-		var servers []model.Server
-		var nextCursor string
-		var err error
-
-		// Special handling for package_registry filter
-		if packageRegistry, ok := filters["package_registry"].(string); ok && packageRegistry != "" {
-			// Use dedicated package registry filter
-			servers, err = FilterServersByPackageRegistry(registry, packageRegistry, limit)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			// No pagination cursor for package registry filtering yet
-			nextCursor = ""
-		} else {
-			// Use regular filtering
-			servers, nextCursor, err = ListWithFiltersV2(registry, filters, cursor, limit)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-
-		// Log the results
-		log.Printf("VP Servers: Found %d servers after filtering (filters=%+v)", len(servers), filters)
-
-		// Ensure we return empty array instead of nil
-		if servers == nil {
-			servers = []model.Server{}
-		}
-
-		// Create paginated response
-		response := PaginatedResponse{
-			Data: servers,
-		}
-
-		// Add metadata if there's a next cursor
-		if nextCursor != "" {
-			response.Metadata = Metadata{
-				NextCursor: nextCursor,
-				Count:      len(servers),
-			}
-		}
-
+// GetServersHandler returns a list of servers with stats included
+func (h *VPHandlers) GetServersHandler(w http.ResponseWriter, r *http.Request) {
+	// Check cache first
+	cacheKey := "vp:servers:" + r.URL.Query().Encode()
+	if cached, found := h.statsCache.Get(cacheKey); found {
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-			return
-		}
+		w.Header().Set("X-Cache", "HIT")
+		json.NewEncoder(w).Encode(cached)
+		return
+	}
+
+	// Get servers from the main service
+	servers, err := h.service.GetServers(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get servers: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get server IDs for batch stats lookup
+	serverIDs := make([]string, len(servers))
+	for i, server := range servers {
+		serverIDs[i] = server.ID
+	}
+
+	// Get stats for all servers
+	statsMap, err := h.statsDB.GetBatchStats(r.Context(), serverIDs)
+	if err != nil {
+		// Log error but continue without stats
+		fmt.Printf("Failed to get stats: %v\n", err)
+		statsMap = make(map[string]*stats.ServerStats)
+	}
+
+	// Create extended servers response
+	extendedServers := model.NewExtendedServers(servers, statsMap)
+	response := model.ExtendedServersResponse{
+		Servers: extendedServers,
+	}
+
+	// Cache the response
+	h.statsCache.Set(cacheKey, response)
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache", "MISS")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
 	}
 }
 
-// ServersDetailHandler returns a handler for getting details of a specific server by ID
-func ServersDetailHandler(registry service.RegistryService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+// GetServerByIDHandler returns a single server with stats
+func (h *VPHandlers) GetServerByIDHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract server ID from URL path
+	path := r.URL.Path
+	parts := strings.Split(strings.TrimPrefix(path, "/vp/servers/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "Server ID is required", http.StatusBadRequest)
+		return
+	}
+	serverID := parts[0]
 
-		// Extract the server ID from the URL path
-		id := r.PathValue("id")
-
-		// Validate that the ID is a valid UUID
-		_, err := uuid.Parse(id)
-		if err != nil {
-			http.Error(w, "Invalid server ID format", http.StatusBadRequest)
-			return
-		}
-
-		// Get the server details from the registry service
-		serverDetail, err := registry.GetByID(id)
-		if err != nil {
-			if err.Error() == "record not found" {
-				http.Error(w, "Server not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, "Error retrieving server details", http.StatusInternalServerError)
-			return
-		}
-
+	// Check cache
+	cacheKey := fmt.Sprintf("vp:server:%s", serverID)
+	if cached, found := h.statsCache.Get(cacheKey); found {
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(serverDetail); err != nil {
-			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		w.Header().Set("X-Cache", "HIT")
+		json.NewEncoder(w).Encode(cached)
+		return
+	}
+
+	// Get server from main service
+	server, err := h.service.GetServerByID(r.Context(), serverID)
+	if err != nil {
+		if err == service.ErrServerNotFound {
+			http.Error(w, "Server not found", http.StatusNotFound)
 			return
 		}
+		http.Error(w, fmt.Sprintf("Failed to get server: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get stats for the server
+	serverStats, err := h.statsDB.GetStats(r.Context(), serverID)
+	if err != nil {
+		// Log error but continue without stats
+		fmt.Printf("Failed to get stats for server %s: %v\n", serverID, err)
+		serverStats = &stats.ServerStats{ServerID: serverID}
+	}
+
+	// Create extended server response
+	extendedServer := model.NewExtendedServer(server, serverStats)
+	response := model.ExtendedServerResponse{
+		Server: extendedServer,
+	}
+
+	// Cache the response
+	h.statsCache.Set(cacheKey, response)
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache", "MISS")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
 	}
 }
 
-// buildFilters constructs a filter map from query parameters
-func buildFilters(queryParams map[string][]string) map[string]interface{} {
-	filters := make(map[string]interface{})
-	
-	// Filter by name
-	if names, ok := queryParams["name"]; ok && len(names) > 0 {
-		filters["name"] = names[0]
+// SearchServersHandler searches servers with stats included
+func (h *VPHandlers) SearchServersHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, "Search query is required", http.StatusBadRequest)
+		return
 	}
-	
-	// Filter by repository URL
-	if repoURLs, ok := queryParams["repository_url"]; ok && len(repoURLs) > 0 {
-		filters["repository.url"] = repoURLs[0]
+
+	// For now, redirect to regular search and enhance with stats
+	// In a real implementation, this would integrate with the search service
+	servers, err := h.service.SearchServers(r.Context(), query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Search failed: %v", err), http.StatusInternalServerError)
+		return
 	}
-	
-	// Filter by repository source
-	if repoSources, ok := queryParams["repository_source"]; ok && len(repoSources) > 0 {
-		filters["repository.source"] = repoSources[0]
+
+	// Get server IDs for batch stats lookup
+	serverIDs := make([]string, len(servers))
+	for i, server := range servers {
+		serverIDs[i] = server.ID
 	}
-	
-	// Filter by version
-	if versions, ok := queryParams["version"]; ok && len(versions) > 0 {
-		filters["version"] = versions[0]
+
+	// Get stats for all servers
+	statsMap, err := h.statsDB.GetBatchStats(r.Context(), serverIDs)
+	if err != nil {
+		statsMap = make(map[string]*stats.ServerStats)
 	}
-	
-	// Filter by latest only
-	if latests, ok := queryParams["latest"]; ok && len(latests) > 0 {
-		if latests[0] == "true" {
-			filters["version_detail.is_latest"] = true
-		} else if latests[0] == "false" {
-			filters["version_detail.is_latest"] = false
-		}
+
+	// Create extended servers response
+	extendedServers := model.NewExtendedServers(servers, statsMap)
+	response := model.ExtendedServersResponse{
+		Servers: extendedServers,
 	}
-	
-	// Filter by package registry (npm, docker, pypi, etc.)
-	if packageRegistries, ok := queryParams["package_registry"]; ok && len(packageRegistries) > 0 {
-		filters["package_registry"] = packageRegistries[0]
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
 	}
-	
-	return filters
+}
+
+// Helper method to convert basic servers to type Server pointers
+func convertToServerPointers(servers []types.Server) []*types.Server {
+	result := make([]*types.Server, len(servers))
+	for i := range servers {
+		result[i] = &servers[i]
+	}
+	return result
 }

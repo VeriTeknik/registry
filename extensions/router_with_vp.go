@@ -2,25 +2,33 @@ package extensions
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/modelcontextprotocol/registry/extensions/vp"
-	"github.com/modelcontextprotocol/registry/internal/api/router"
-	"github.com/modelcontextprotocol/registry/internal/auth"
-	"github.com/modelcontextprotocol/registry/internal/config"
-	"github.com/modelcontextprotocol/registry/internal/middleware"
 	"github.com/modelcontextprotocol/registry/internal/service"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// NewWithExtensions creates a new router with all API versions including extensions
-func NewWithExtensions(cfg *config.Config, registry service.RegistryService, authService auth.Service) http.Handler {
-	// Get the base router with v0 routes
-	mux := router.New(cfg, registry, authService)
-	
-	// Register vp extension routes
-	vp.RegisterRoutes(mux, registry)
-	
-	// Apply CORS middleware
-	handler := middleware.CORS(cfg.CORSOrigins)(mux)
-	
-	return handler
+// ExtendedRouterConfig holds configuration for extended router
+type ExtendedRouterConfig struct {
+	BaseRouter       *http.ServeMux
+	Service          *service.Service
+	MongoClient      *mongo.Client
+	DatabaseName     string
+	AnalyticsBaseURL string
+}
+
+// SetupExtendedRouter adds VP routes to the existing router
+func SetupExtendedRouter(config ExtendedRouterConfig) error {
+	// Configure VP routes
+	vpConfig := vp.Config{
+		Service:          config.Service,
+		MongoClient:      config.MongoClient,
+		DatabaseName:     config.DatabaseName,
+		CacheTTL:         5 * time.Minute,
+		AnalyticsBaseURL: config.AnalyticsBaseURL,
+	}
+
+	// Setup VP routes on the existing router
+	return vp.SetupVPRoutes(config.BaseRouter, vpConfig)
 }

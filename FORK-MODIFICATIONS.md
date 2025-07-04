@@ -106,6 +106,79 @@ If deployment fails:
 2. Manual rollback: SSH to server and run `docker tag registry:backup-{timestamp} registry:latest`
 3. Restart services: `docker compose down && docker compose up -d`
 
+## Stats Extension System
+
+### Overview
+
+Added a comprehensive stats system under `/extensions` that provides:
+- Installation tracking and ratings
+- Analytics integration
+- Community server claiming with stats transfer
+- Leaderboards and trending servers
+
+### Added Files for Stats
+
+1. **Stats Core (`/extensions/stats/`)**
+   - `model.go`: Data models for server statistics
+   - `database.go`: MongoDB operations for stats collection
+   - `sync.go`: Analytics synchronization service
+
+2. **VP API Extensions (`/extensions/vp/`)**
+   - `model/extended_server.go`: Server model with stats fields
+   - `model/claim.go`: Models for server claiming
+   - `handlers/servers.go`: Enhanced server endpoints with stats
+   - `handlers/stats.go`: Stats-specific endpoints
+   - `handlers/claim.go`: Community server claiming
+   - `router.go`: VP route configuration
+
+3. **Integration (`/extensions/`)**
+   - `router_with_vp.go`: Extended router with VP endpoints
+
+### New Database Collection
+
+- **`server_stats`**: Stores installation counts, ratings, and analytics metrics
+  ```javascript
+  {
+    "server_id": "unique-id",
+    "installation_count": 1234,
+    "rating": 4.5,
+    "rating_count": 78,
+    "active_installs": 890,
+    "daily_active_users": 456,
+    "monthly_active_users": 789,
+    "last_updated": "2024-01-01T00:00:00Z"
+  }
+  ```
+
+### New API Endpoints
+
+All new endpoints are under `/vp` (v-plugged) prefix:
+
+- `GET /vp/servers` - List servers with stats included
+- `GET /vp/servers/{id}` - Get server details with stats
+- `POST /vp/servers/{id}/install` - Track an installation
+- `POST /vp/servers/{id}/rate` - Submit a rating
+- `GET /vp/servers/{id}/stats` - Get stats only
+- `POST /vp/servers/{id}/claim` - Claim a community server
+- `GET /vp/stats/global` - Global registry statistics
+- `GET /vp/stats/leaderboard` - Top servers by various metrics
+- `GET /vp/stats/trending` - Trending servers
+
+### Environment Variables for Stats
+
+```bash
+MCP_REGISTRY_ANALYTICS_URL        # Analytics service URL
+MCP_REGISTRY_CACHE_TTL           # Cache TTL in seconds
+MCP_REGISTRY_STATS_SYNC_INTERVAL # Analytics sync interval
+```
+
+### Analytics Integration
+
+The stats system integrates with the analytics deployment at `http://analytics-api:8081`:
+- Syncs active user metrics periodically
+- Provides real-time installation tracking
+- Calculates trending servers based on growth
+
 ## Local Development
 
 To run locally with Traefik:
@@ -122,4 +195,10 @@ Without Traefik (development):
 # Temporarily restore ports in docker-compose.yml
 # Then run:
 docker compose up -d
+```
+
+To run with stats extension:
+```bash
+# Use the extended docker compose file
+docker compose -f docker-compose-extended.yml up -d
 ```
