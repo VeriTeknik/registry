@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 )
 
@@ -226,7 +227,7 @@ func (g *GitHubDeviceAuth) checkOrgMembership(ctx context.Context, token, userna
 	// true if status code is 204 No Content
 	// false if status code is 404 Not Found
 
-	url := fmt.Sprint("https://api.github.com/orgs/", org, "/members/", username)
+	url := fmt.Sprintf("https://api.github.com/orgs/%s/members/%s", url.PathEscape(org), url.PathEscape(username))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false, err

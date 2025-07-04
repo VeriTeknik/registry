@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -44,7 +45,7 @@ func NewHTTPAnalyticsClient(baseURL string) *HTTPAnalyticsClient {
 
 // GetServerMetrics fetches metrics for a single server
 func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID string) (*AnalyticsMetrics, error) {
-	url := fmt.Sprintf("%s/api/v1/servers/%s/metrics", c.baseURL, serverID)
+	url := fmt.Sprintf("%s/api/v1/servers/%s/metrics", c.baseURL, url.PathEscape(serverID))
 	
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
