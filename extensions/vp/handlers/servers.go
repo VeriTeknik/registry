@@ -18,14 +18,16 @@ import (
 type VPHandlers struct {
 	service      service.RegistryService
 	statsDB      stats.Database
+	feedbackDB   stats.FeedbackDatabase
 	statsCache   *stats.CacheService
 }
 
 // NewVPHandlers creates a new instance of VPHandlers
-func NewVPHandlers(service service.RegistryService, statsDB stats.Database, statsCache *stats.CacheService) *VPHandlers {
+func NewVPHandlers(service service.RegistryService, statsDB stats.Database, feedbackDB stats.FeedbackDatabase, statsCache *stats.CacheService) *VPHandlers {
 	return &VPHandlers{
 		service:    service,
 		statsDB:    statsDB,
+		feedbackDB: feedbackDB,
 		statsCache: statsCache,
 	}
 }

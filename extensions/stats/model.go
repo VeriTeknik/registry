@@ -29,10 +29,13 @@ type ServerStats struct {
 	ClaimedAt   time.Time `json:"claimed_at,omitempty" bson:"claimed_at,omitempty"`
 }
 
-// RatingRequest represents a request to submit a rating
+// RatingRequest represents a request to submit a rating with optional comment
 type RatingRequest struct {
-	Rating float64 `json:"rating" validate:"required,min=1,max=5"`
-	Source string  `json:"source,omitempty"` // REGISTRY or COMMUNITY, defaults to REGISTRY
+	Rating    float64 `json:"rating" validate:"required,min=1,max=5"`
+	Comment   string  `json:"comment,omitempty" validate:"max=1000"`  // Optional user comment
+	Source    string  `json:"source,omitempty"`                      // REGISTRY or COMMUNITY, defaults to REGISTRY
+	UserID    string  `json:"user_id,omitempty"`                     // User identifier for tracking
+	Timestamp string  `json:"timestamp,omitempty"`                   // Client-provided timestamp
 }
 
 // InstallRequest represents an installation tracking request

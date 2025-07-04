@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -73,7 +74,7 @@ func (h *VPHandlers) TrackInstallHandler(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// SubmitRatingHandler submits a rating for a server
+// SubmitRatingHandler handles rating submission with backward compatibility
 func (h *VPHandlers) SubmitRatingHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -102,20 +103,30 @@ func (h *VPHandlers) SubmitRatingHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate source if provided
-	if ratingReq.Source != "" && ratingReq.Source != stats.SourceRegistry && ratingReq.Source != stats.SourceCommunity {
-		http.Error(w, "Invalid source. Must be 'REGISTRY' or 'COMMUNITY'", http.StatusBadRequest)
+	// If user_id is provided and comment exists, use the feedback handler
+	if ratingReq.UserID != "" || ratingReq.Comment != "" {
+		// For feedback tracking, user_id is required
+		if ratingReq.UserID == "" {
+			// Generate a temporary user ID based on IP for anonymous ratings with comments
+			ratingReq.UserID = "anon_" + strings.ReplaceAll(r.RemoteAddr, ":", "_")
+		}
+		
+		// Rewind the request body
+		bodyBytes, _ := json.Marshal(ratingReq)
+		r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+		h.SubmitFeedbackHandler(w, r)
 		return
 	}
 
+	// Otherwise, use the simple rating update (backward compatibility)
 	// Default source to REGISTRY if not specified
 	if ratingReq.Source == "" {
 		ratingReq.Source = stats.SourceRegistry
 	}
 
-	// Update rating with source
+	// Update rating statistics
 	if err := h.statsDB.UpdateRating(r.Context(), serverID, ratingReq.Source, ratingReq.Rating); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to submit rating: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to update rating: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -124,10 +135,8 @@ func (h *VPHandlers) SubmitRatingHandler(w http.ResponseWriter, r *http.Request)
 	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s", serverID))
 	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s:%s", serverID, ratingReq.Source))
 	h.statsCache.Delete("vp:servers:") // Clear servers list cache
-	h.statsCache.Delete("vp:stats:global") // Clear global stats cache
-	h.statsCache.Delete(fmt.Sprintf("vp:stats:global:%s", ratingReq.Source)) // Clear source-specific global stats
 
-	// Return updated stats
+	// Get updated stats
 	updatedStats, err := h.statsDB.GetStats(r.Context(), serverID, ratingReq.Source)
 	if err != nil {
 		// Still return success even if we can't get updated stats

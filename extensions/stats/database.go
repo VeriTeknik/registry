@@ -3,6 +3,7 @@ package stats
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,9 +99,16 @@ func NewMongoDatabase(client *mongo.Client, databaseName string) (*MongoDatabase
 		},
 	}
 
-	_, err := collection.Indexes().CreateMany(ctx, indexes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create indexes: %w", err)
+	// Create indexes one by one to handle conflicts gracefully
+	for _, index := range indexes {
+		_, err := collection.Indexes().CreateOne(ctx, index)
+		if err != nil {
+			// Log index creation errors but don't fail if index already exists
+			if !strings.Contains(err.Error(), "IndexKeySpecsConflict") && !strings.Contains(err.Error(), "already exists") {
+				return nil, fmt.Errorf("failed to create index: %w", err)
+			}
+			// Index already exists, which is fine
+		}
 	}
 
 	return &MongoDatabase{

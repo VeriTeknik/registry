@@ -133,10 +133,13 @@ func main() {
 				AnalyticsBaseURL: os.Getenv("MCP_REGISTRY_ANALYTICS_URL"),
 			}
 			
+			log.Printf("Setting up extended routes with database: %s", cfg.DatabaseName)
 			if err := extensions.SetupExtendedRouter(extConfig); err != nil {
 				log.Printf("Failed to setup extended routes: %v", err)
+				log.Printf("VP endpoints will not be available due to setup error")
 			} else {
 				log.Println("Stats extension enabled at /vp endpoints")
+				log.Println("VP routes setup completed successfully")
 			}
 		}
 	}
