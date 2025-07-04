@@ -76,6 +76,19 @@ func main() {
 		api.GET("/health", handlers.HealthCheck(esClient, redisClient))
 	}
 
+	// Add metrics endpoints (compatible with frontend expectations)
+	metrics := router.Group("/api/metrics")
+	{
+		metrics.GET("/global", handlers.GetGlobalMetrics(analyticsService))
+		metrics.GET("/trending", handlers.GetMetricsTrending(analyticsService))
+	}
+
+	// Add events endpoints (compatible with frontend expectations)
+	events := router.Group("/api/events")
+	{
+		events.POST("/batch", handlers.BatchTrackEvents(analyticsService))
+	}
+
 	// CORS middleware
 	origins := strings.Split(corsOrigins, ",")
 	c := cors.New(cors.Options{

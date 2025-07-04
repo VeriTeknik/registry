@@ -38,6 +38,40 @@ func TrackEvent(svc *service.AnalyticsService) gin.HandlerFunc {
 	}
 }
 
+// BatchTrackEvents handles batch event tracking
+func BatchTrackEvents(svc *service.AnalyticsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Events []models.TrackEventRequest `json:"events" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Process each event
+		for _, eventReq := range req.Events {
+			event := models.Event{
+				Timestamp:  time.Now(),
+				EventType:  eventReq.EventType,
+				ServerID:   eventReq.ServerID,
+				ClientID:   eventReq.ClientID,
+				SessionID:  eventReq.SessionID,
+				UserID:     eventReq.UserID,
+				Metadata:   eventReq.Metadata,
+			}
+
+			// Continue processing even if individual events fail
+			_ = svc.TrackEvent(c.Request.Context(), &event)
+		}
+
+		c.JSON(http.StatusAccepted, gin.H{
+			"status": "accepted",
+			"count": len(req.Events),
+		})
+	}
+}
+
 // GetServerStats returns server statistics
 func GetServerStats(svc *service.AnalyticsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -257,6 +291,36 @@ func GetComments(svc *service.AnalyticsService) gin.HandlerFunc {
 			"total": total,
 			"limit": limit,
 			"offset": offset,
+		})
+	}
+}
+
+// GetGlobalMetrics returns global analytics metrics
+func GetGlobalMetrics(svc *service.AnalyticsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		metrics, err := svc.GetGlobalMetrics(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get global metrics"})
+			return
+		}
+
+		c.JSON(http.StatusOK, metrics)
+	}
+}
+
+// GetMetricsTrending returns trending servers for metrics API
+func GetMetricsTrending(svc *service.AnalyticsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5"))
+		
+		trending, err := svc.GetTrending(c.Request.Context(), "24h", limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get trending servers"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"servers": trending,
 		})
 	}
 }
