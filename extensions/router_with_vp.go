@@ -12,7 +12,7 @@ import (
 // ExtendedRouterConfig holds configuration for extended router
 type ExtendedRouterConfig struct {
 	BaseRouter       *http.ServeMux
-	Service          *service.Service
+	Service          service.RegistryService
 	MongoClient      *mongo.Client
 	DatabaseName     string
 	AnalyticsBaseURL string

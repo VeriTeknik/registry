@@ -7,20 +7,20 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
-	"github.com/modelcontextprotocol/registry/extensions/vp/model"
+	vpmodel "github.com/modelcontextprotocol/registry/extensions/vp/model"
+	"github.com/modelcontextprotocol/registry/internal/model"
 	"github.com/modelcontextprotocol/registry/internal/service"
-	"github.com/modelcontextprotocol/registry/internal/types"
 )
 
 // VPHandlers contains the handlers for VP (v-plugged) endpoints
 type VPHandlers struct {
-	service      *service.Service
+	service      service.RegistryService
 	statsDB      stats.Database
 	statsCache   *stats.CacheService
 }
 
 // NewVPHandlers creates a new instance of VPHandlers
-func NewVPHandlers(service *service.Service, statsDB stats.Database, statsCache *stats.CacheService) *VPHandlers {
+func NewVPHandlers(service service.RegistryService, statsDB stats.Database, statsCache *stats.CacheService) *VPHandlers {
 	return &VPHandlers{
 		service:    service,
 		statsDB:    statsDB,
@@ -40,10 +40,17 @@ func (h *VPHandlers) GetServersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get servers from the main service
-	servers, err := h.service.GetServers(r.Context())
+	// Using List with large limit to get all servers
+	serverList, _, err := h.service.List("", 1000)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get servers: %v", err), http.StatusInternalServerError)
 		return
+	}
+	
+	// Convert to pointers
+	servers := make([]*model.Server, len(serverList))
+	for i := range serverList {
+		servers[i] = &serverList[i]
 	}
 
 	// Get server IDs for batch stats lookup
@@ -61,8 +68,8 @@ func (h *VPHandlers) GetServersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create extended servers response
-	extendedServers := model.NewExtendedServers(servers, statsMap)
-	response := model.ExtendedServersResponse{
+	extendedServers := vpmodel.NewExtendedServers(servers, statsMap)
+	response := vpmodel.ExtendedServersResponse{
 		Servers: extendedServers,
 	}
 
@@ -99,15 +106,14 @@ func (h *VPHandlers) GetServerByIDHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Get server from main service
-	server, err := h.service.GetServerByID(r.Context(), serverID)
+	serverDetail, err := h.service.GetByID(serverID)
 	if err != nil {
-		if err == service.ErrServerNotFound {
-			http.Error(w, "Server not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to get server: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Server not found", http.StatusNotFound)
 		return
 	}
+	
+	// ServerDetail already contains Server
+	server := &serverDetail.Server
 
 	// Get stats for the server
 	serverStats, err := h.statsDB.GetStats(r.Context(), serverID)
@@ -118,8 +124,8 @@ func (h *VPHandlers) GetServerByIDHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Create extended server response
-	extendedServer := model.NewExtendedServer(server, serverStats)
-	response := model.ExtendedServerResponse{
+	extendedServer := vpmodel.NewExtendedServer(server, serverStats)
+	response := vpmodel.ExtendedServerResponse{
 		Server: extendedServer,
 	}
 
@@ -135,51 +141,10 @@ func (h *VPHandlers) GetServerByIDHandler(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// SearchServersHandler searches servers with stats included
-func (h *VPHandlers) SearchServersHandler(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
-	if query == "" {
-		http.Error(w, "Search query is required", http.StatusBadRequest)
-		return
-	}
-
-	// For now, redirect to regular search and enhance with stats
-	// In a real implementation, this would integrate with the search service
-	servers, err := h.service.SearchServers(r.Context(), query)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Search failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Get server IDs for batch stats lookup
-	serverIDs := make([]string, len(servers))
-	for i, server := range servers {
-		serverIDs[i] = server.ID
-	}
-
-	// Get stats for all servers
-	statsMap, err := h.statsDB.GetBatchStats(r.Context(), serverIDs)
-	if err != nil {
-		statsMap = make(map[string]*stats.ServerStats)
-	}
-
-	// Create extended servers response
-	extendedServers := model.NewExtendedServers(servers, statsMap)
-	response := model.ExtendedServersResponse{
-		Servers: extendedServers,
-	}
-
-	// Send response
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-}
 
 // Helper method to convert basic servers to type Server pointers
-func convertToServerPointers(servers []types.Server) []*types.Server {
-	result := make([]*types.Server, len(servers))
+func convertToServerPointers(servers []model.Server) []*model.Server {
+	result := make([]*model.Server, len(servers))
 	for i := range servers {
 		result[i] = &servers[i]
 	}

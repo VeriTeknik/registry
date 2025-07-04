@@ -1,14 +1,14 @@
 package model
 
 import (
-	"github.com/modelcontextprotocol/registry/internal/types"
+	"github.com/modelcontextprotocol/registry/internal/model"
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 )
 
 // ClaimRequest represents a request to claim a community server
 type ClaimRequest struct {
 	// PublishRequest contains the standard publish request fields
-	PublishRequest types.PublishRequest `json:"publish_request" validate:"required"`
+	PublishRequest model.PublishRequest `json:"publish_request" validate:"required"`
 	
 	// TransferStats indicates whether to transfer stats from the community server
 	TransferStats bool `json:"transfer_stats"`

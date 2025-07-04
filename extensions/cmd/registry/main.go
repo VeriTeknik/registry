@@ -17,11 +17,15 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/registry/extensions"
+	"github.com/modelcontextprotocol/registry/internal/api/router"
 	"github.com/modelcontextprotocol/registry/internal/auth"
 	"github.com/modelcontextprotocol/registry/internal/config"
 	"github.com/modelcontextprotocol/registry/internal/database"
+	"github.com/modelcontextprotocol/registry/internal/middleware"
 	"github.com/modelcontextprotocol/registry/internal/model"
 	"github.com/modelcontextprotocol/registry/internal/service"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // Version information (set during build)
@@ -107,8 +111,38 @@ func main() {
 		}
 	}
 
-	// Create extended HTTP server with our custom router
-	handler := extensions.NewWithExtensions(cfg, registryService, authService)
+	// Create standard router first
+	mux := router.New(cfg, registryService, authService)
+	
+	// Setup extended routes with stats if using MongoDB
+	if cfg.DatabaseType == config.DatabaseTypeMongoDB {
+		// Create a new MongoDB connection for stats
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		
+		clientOptions := options.Client().ApplyURI(cfg.DatabaseURL)
+		mongoClient, err := mongo.Connect(ctx, clientOptions)
+		if err != nil {
+			log.Printf("Failed to connect to MongoDB for stats: %v", err)
+		} else {
+			extConfig := extensions.ExtendedRouterConfig{
+				BaseRouter:       mux,
+				Service:          registryService,
+				MongoClient:      mongoClient,
+				DatabaseName:     cfg.DatabaseName,
+				AnalyticsBaseURL: os.Getenv("MCP_REGISTRY_ANALYTICS_URL"),
+			}
+			
+			if err := extensions.SetupExtendedRouter(extConfig); err != nil {
+				log.Printf("Failed to setup extended routes: %v", err)
+			} else {
+				log.Println("Stats extension enabled at /vp endpoints")
+			}
+		}
+	}
+	
+	// Apply CORS middleware
+	handler := middleware.CORS(cfg.CORSOrigins)(mux)
 	log.Printf("CORS Origins configured: %s", cfg.CORSOrigins)
 	
 	server := &http.Server{

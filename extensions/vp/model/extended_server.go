@@ -1,13 +1,13 @@
 package model
 
 import (
-	"github.com/modelcontextprotocol/registry/internal/types"
+	"github.com/modelcontextprotocol/registry/internal/model"
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 )
 
 // ExtendedServer represents a server with stats included
 type ExtendedServer struct {
-	*types.Server
+	*model.Server
 	InstallationCount  int     `json:"installation_count"`
 	Rating            float64 `json:"rating"`
 	RatingCount       int     `json:"rating_count"`
@@ -26,7 +26,7 @@ type ExtendedServerResponse struct {
 }
 
 // NewExtendedServer creates an ExtendedServer from a Server and ServerStats
-func NewExtendedServer(server *types.Server, stats *stats.ServerStats) ExtendedServer {
+func NewExtendedServer(server *model.Server, stats *stats.ServerStats) ExtendedServer {
 	es := ExtendedServer{
 		Server: server,
 	}
@@ -43,7 +43,7 @@ func NewExtendedServer(server *types.Server, stats *stats.ServerStats) ExtendedS
 }
 
 // NewExtendedServers creates a slice of ExtendedServers from servers and their stats
-func NewExtendedServers(servers []*types.Server, statsMap map[string]*stats.ServerStats) []ExtendedServer {
+func NewExtendedServers(servers []*model.Server, statsMap map[string]*stats.ServerStats) []ExtendedServer {
 	result := make([]ExtendedServer, 0, len(servers))
 	
 	for _, server := range servers {

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
-	"github.com/modelcontextprotocol/registry/extensions/vp/model"
-	"github.com/modelcontextprotocol/registry/internal/types"
+	vpmodel "github.com/modelcontextprotocol/registry/extensions/vp/model"
+	"github.com/modelcontextprotocol/registry/internal/model"
 )
 
 // TrackInstallHandler tracks an installation for a server
@@ -291,10 +291,11 @@ func (h *VPHandlers) GetTrendingHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Get servers from main service
-	servers := make([]*types.Server, 0)
+	servers := make([]*model.Server, 0)
 	for _, id := range serverIDs {
-		server, err := h.service.GetServerByID(r.Context(), id)
+		serverDetail, err := h.service.GetByID(id)
 		if err == nil {
+			server := &serverDetail.Server
 			servers = append(servers, server)
 		}
 	}
@@ -306,7 +307,7 @@ func (h *VPHandlers) GetTrendingHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Create extended servers response
-	extendedServers := model.NewExtendedServers(servers, statsMap)
+	extendedServers := vpmodel.NewExtendedServers(servers, statsMap)
 	response := map[string]interface{}{
 		"limit":   limit,
 		"servers": extendedServers,

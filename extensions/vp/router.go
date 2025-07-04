@@ -14,7 +14,7 @@ import (
 
 // Config holds configuration for VP endpoints
 type Config struct {
-	Service          *service.Service
+	Service          service.RegistryService
 	MongoClient      *mongo.Client
 	DatabaseName     string
 	CacheTTL         time.Duration
@@ -61,8 +61,6 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 		}
 	})
 
-	// Search endpoint
-	mux.HandleFunc("/vp/search", vpHandlers.SearchServersHandler)
 
 	// Global stats endpoints
 	mux.HandleFunc("/vp/stats/global", vpHandlers.GetGlobalStatsHandler)
