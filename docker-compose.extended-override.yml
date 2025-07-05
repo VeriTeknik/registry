@@ -19,8 +19,9 @@ services:
       - MCP_REGISTRY_GITHUB_CLIENT_ID=${MCP_REGISTRY_GITHUB_CLIENT_ID}
       - MCP_REGISTRY_GITHUB_CLIENT_SECRET=${MCP_REGISTRY_GITHUB_CLIENT_SECRET}
       - MCP_REGISTRY_CORS_ORIGINS=${MCP_REGISTRY_CORS_ORIGINS}
-      # Analytics URL - set to actual Elasticsearch analytics service if available
-      # - MCP_REGISTRY_ANALYTICS_URL=${MCP_REGISTRY_ANALYTICS_URL:-https://analytics.plugged.in}
+      - MCP_REGISTRY_ANALYTICS_URL=${MCP_REGISTRY_ANALYTICS_URL}
+      - ANALYTICS_API_USERNAME=${ANALYTICS_API_USERNAME}
+      - ANALYTICS_API_PASSWORD=${ANALYTICS_API_PASSWORD}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.registry.rule=Host(`registry.plugged.in`)"

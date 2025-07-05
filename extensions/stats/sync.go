@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 )
@@ -46,11 +47,18 @@ func NewHTTPAnalyticsClient(baseURL string) *HTTPAnalyticsClient {
 // GetServerMetrics fetches metrics for a single server
 func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID string) (*ServerAnalyticsMetrics, error) {
 	// Updated to use /stats endpoint instead of /metrics
-	url := fmt.Sprintf("%s/api/v1/servers/%s/stats", c.baseURL, url.PathEscape(serverID))
+	url := fmt.Sprintf("%s/v1/servers/%s/stats", c.baseURL, url.PathEscape(serverID))
 	
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	// Add authentication if credentials are available in environment
+	if username := os.Getenv("ANALYTICS_API_USERNAME"); username != "" {
+		if password := os.Getenv("ANALYTICS_API_PASSWORD"); password != "" {
+			req.SetBasicAuth(username, password)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)
