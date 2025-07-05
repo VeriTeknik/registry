@@ -2,50 +2,45 @@
 
 This directory contains extensions to the MCP Registry that add additional functionality without modifying the upstream codebase.
 
+## Documentation
+
+### Primary References
+- **[VP API Reference](VP_API_REFERENCE.md)** - Complete API documentation with all endpoints, parameters, and responses
+- **[Frontend Integration Guide](VP_FRONTEND_INTEGRATION_GUIDE.md)** - React/JavaScript integration examples and best practices
+- **[System Architecture Guide](pluggedin_registry_stats_and_analytics_guide.md)** - Full system overview and architecture details
+- **[Data Flow Explanation](DATA_FLOW_EXPLANATION.md)** - How data gets populated and flows through the system
+
+### Quick Links
+- [Authentication Requirements](VP_API_REFERENCE.md#authentication)
+- [Stats API](VP_API_REFERENCE.md#server-statistics)
+- [Analytics Dashboard](VP_API_REFERENCE.md#analytics-dashboard)
+- [Error Handling](VP_API_REFERENCE.md#error-handling)
+
 ## /vp API Extension
 
-The `/vp` (v-plugged) API provides enhanced filtering capabilities and statistics tracking for the registry endpoints.
+The `/vp` (v-plugged) API provides enhanced filtering capabilities, statistics tracking, and comprehensive analytics for the registry.
 
-### Endpoints
+### Key Features
 
-#### GET /vp/servers
+1. **Enhanced Server Statistics**
+   - Real-time installation tracking
+   - User ratings and feedback system
+   - Growth metrics and trends
+   - Activity monitoring
 
-Lists servers with filtering support.
+2. **Analytics Dashboard**
+   - Comprehensive metrics with historical trends
+   - Hot/trending servers
+   - Search analytics
+   - Real-time activity feeds
 
-**Query Parameters:**
-- `cursor` (optional): UUID for pagination
-- `limit` (optional): Number of results (1-100, default 30)
-- `name` (optional): Filter by exact server name
-- `repository_url` (optional): Filter by repository URL
-- `repository_source` (optional): Filter by repository source (e.g., "github")
-- `version` (optional): Filter by specific version
-- `latest` (optional): Filter by latest versions only (true/false)
-- `package_registry` (optional): Filter by package registry type (npm, docker, pypi, etc.)
+3. **Advanced Filtering**
+   - Filter by multiple criteria
+   - Package registry filtering
+   - Version-specific queries
+   - Repository source filtering
 
-**Examples:**
-```bash
-# Get all SQLite servers
-GET /vp/servers?name=sqlite
-
-# Get all npm packages
-GET /vp/servers?package_registry=npm
-
-# Get all docker packages
-GET /vp/servers?package_registry=docker
-
-# Get latest versions only
-GET /vp/servers?latest=true
-
-# Get servers from GitHub
-GET /vp/servers?repository_source=github
-
-# Combine filters
-GET /vp/servers?repository_source=github&latest=true&limit=50
-```
-
-#### GET /vp/servers/{id}
-
-Get detailed information about a specific server (same as v0).
+For complete endpoint documentation, see the **[VP API Reference](VP_API_REFERENCE.md)**.
 
 ### Running the Extended Registry
 
