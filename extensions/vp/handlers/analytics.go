@@ -43,10 +43,58 @@ func (h *VPHandlers) GetDashboardMetricsHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Check if analytics client is available
-	if h.analyticsClient == nil {
-		// Fall back to MongoDB if no analytics client
-		metrics, err := h.analyticsDB.GetAnalyticsMetrics(r.Context(), period)
+	// Try analytics client first if available
+	if h.analyticsClient != nil {
+		log.Printf("Analytics client available, attempting to fetch dashboard metrics for period: %s", period)
+		metrics, err := h.analyticsClient.GetDashboardMetrics(r.Context(), period)
+		if err == nil {
+			// Successfully got metrics from analytics API
+			// Add hot and newest server info from MongoDB if available
+			var hottestServer *stats.ServerQuickStat
+			if h.analyticsDB != nil {
+				trending, _ := h.analyticsDB.CalculateTrending(r.Context(), 1)
+				if len(trending) > 0 {
+					hottestServer = &stats.ServerQuickStat{
+						ServerID:   trending[0].ServerID,
+						ServerName: trending[0].ServerName,
+						Value:      fmt.Sprintf("%.1f/hr", trending[0].InstallVelocity),
+						Label:      "installs/hour",
+					}
+				}
+			}
+
+			var newestServer *stats.ServerQuickStat
+			if h.statsDB != nil {
+				recentServers, _ := h.statsDB.GetRecentServers(r.Context(), 1, "")
+				if len(recentServers) > 0 {
+					server, _ := h.service.GetByID(recentServers[0].ServerID)
+					if server != nil {
+						newestServer = &stats.ServerQuickStat{
+							ServerID:   server.ID,
+							ServerName: server.Name,
+							Value:      "Just added",
+							Label:      time.Since(recentServers[0].FirstSeen).Round(time.Minute).String() + " ago",
+						}
+					}
+				}
+			}
+			
+			metrics.HottestServer = hottestServer
+			metrics.NewestServer = newestServer
+
+			// Cache and return
+			h.statsCache.Set(cacheKey, metrics)
+			if err := WriteCachedResponse(w, metrics, false); err != nil {
+				WriteStandardError(w, http.StatusInternalServerError, "Failed to encode response")
+			}
+			return
+		}
+		// If analytics API failed, fall through to MongoDB fallback
+		log.Printf("Analytics API failed, falling back to MongoDB: %v", err)
+	}
+	
+	// Fall back to MongoDB
+	metrics, err := h.analyticsDB.GetAnalyticsMetrics(r.Context(), period)
 		if err != nil {
 			WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get dashboard metrics: %v", err))
 			return
@@ -159,61 +207,6 @@ func (h *VPHandlers) GetDashboardMetricsHandler(w http.ResponseWriter, r *http.R
 		if err := WriteCachedResponse(w, dashboard, false); err != nil {
 			WriteStandardError(w, http.StatusInternalServerError, "Failed to encode response")
 		}
-		return
-	}
-	
-	// Get analytics metrics from analytics API
-	metrics, err := h.analyticsClient.GetDashboardMetrics(r.Context(), period)
-	if err != nil {
-		WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get dashboard metrics: %v", err))
-		return
-	}
-	
-	// The analytics API already returns the data in the correct format
-	// Just need to add the hot and newest server info
-	
-	// Try to get hot server from MongoDB if available
-	var hottestServer *stats.ServerQuickStat
-	if h.analyticsDB != nil {
-		trending, _ := h.analyticsDB.CalculateTrending(r.Context(), 1)
-		if len(trending) > 0 {
-			hottestServer = &stats.ServerQuickStat{
-				ServerID:   trending[0].ServerID,
-				ServerName: trending[0].ServerName,
-				Value:      fmt.Sprintf("%.1f/hr", trending[0].InstallVelocity),
-				Label:      "installs/hour",
-			}
-		}
-	}
-
-	// Try to get newest server from MongoDB if available
-	var newestServer *stats.ServerQuickStat
-	if h.statsDB != nil {
-		recentServers, _ := h.statsDB.GetRecentServers(r.Context(), 1, "")
-		if len(recentServers) > 0 {
-			server, _ := h.service.GetByID(recentServers[0].ServerID)
-			if server != nil {
-				newestServer = &stats.ServerQuickStat{
-					ServerID:   server.ID,
-					ServerName: server.Name,
-					Value:      "Just added",
-					Label:      time.Since(recentServers[0].FirstSeen).Round(time.Minute).String() + " ago",
-				}
-			}
-		}
-	}
-	
-	// Add the extra fields
-	metrics.HottestServer = hottestServer
-	metrics.NewestServer = newestServer
-
-	// Cache the response
-	h.statsCache.Set(cacheKey, dashboard)
-
-	// Send response
-	if err := WriteCachedResponse(w, dashboard, false); err != nil {
-		WriteStandardError(w, http.StatusInternalServerError, "Failed to encode response")
-	}
 }
 
 // GetAnalyticsHandler returns comprehensive analytics data
@@ -281,14 +274,11 @@ func (h *VPHandlers) GetActivityFeedHandler(w http.ResponseWriter, r *http.Reque
 	
 	eventType := r.URL.Query().Get("type")
 	
-	// Check if analytics client is available
+	// Try analytics client first if available
 	if h.analyticsClient != nil {
-		// Get recent activity from analytics API
 		activity, err := h.analyticsClient.GetRecentActivity(r.Context(), limit)
-		if err != nil {
-			WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get activity: %v", err))
-			return
-		}
+		if err == nil {
+			// Successfully got activity from analytics API
 		
 		// Filter by type if specified
 		if eventType != "" {
@@ -319,6 +309,9 @@ func (h *VPHandlers) GetActivityFeedHandler(w http.ResponseWriter, r *http.Reque
 
 		writeJSONResponse(w, response)
 		return
+		}
+		// If analytics API failed, fall through to MongoDB fallback
+		log.Printf("Analytics API failed for activity, falling back to MongoDB: %v", err)
 	}
 	
 	// Fall back to MongoDB

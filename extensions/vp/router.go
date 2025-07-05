@@ -195,12 +195,7 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	// Claim verification endpoint
 	mux.HandleFunc("/vp/claim/verify", vpHandlers.GenerateClaimVerificationHandler)
 
-	// Start analytics sync service if configured
-	if config.AnalyticsBaseURL != "" {
-		analyticsClient := stats.NewHTTPAnalyticsClient(config.AnalyticsBaseURL)
-		syncService := stats.NewSyncService(statsDB, analyticsClient, 15*time.Minute)
-		go syncService.Start(context.Background())
-	}
+	// Analytics client is created and passed to handlers, no sync service needed
 
 	log.Println("VP routes setup completed successfully")
 	return nil
