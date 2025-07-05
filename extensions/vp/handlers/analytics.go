@@ -43,112 +43,169 @@ func (h *VPHandlers) GetDashboardMetricsHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Get analytics metrics
-	metrics, err := h.analyticsDB.GetAnalyticsMetrics(r.Context(), period)
+	// Check if analytics client is available
+	if h.analyticsClient == nil {
+		// Fall back to MongoDB if no analytics client
+		metrics, err := h.analyticsDB.GetAnalyticsMetrics(r.Context(), period)
+		if err != nil {
+			WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get dashboard metrics: %v", err))
+			return
+		}
+		
+		// Get trending data
+		trending, _ := h.analyticsDB.CalculateTrending(r.Context(), 1)
+		
+		// Get recent activity for sparklines
+		endTime := time.Now()
+		startTime := endTime.Add(-7 * 24 * time.Hour)
+		timeSeries, _ := h.analyticsDB.GetTimeSeries(r.Context(), startTime, endTime, "day")
+		
+		// Build install trend
+		installTrend := make([]int64, 7)
+		for i, ts := range timeSeries {
+			if i < 7 {
+				installTrend[i] = ts.Installs
+			}
+		}
+
+		// Get comparison data for trends
+		var previousMetrics *stats.AnalyticsMetrics
+		if period == "day" {
+			yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+			previousMetrics, _ = h.analyticsDB.GetAnalyticsMetrics(r.Context(), yesterday)
+		}
+
+		// Calculate trends
+		var installsTrend, apiCallsTrend, activeUsersTrend float64
+		if previousMetrics != nil {
+			installsTrend = calculateTrend(metrics.TotalInstalls, previousMetrics.TotalInstalls)
+			apiCallsTrend = calculateTrend(metrics.TotalAPICalls, previousMetrics.TotalAPICalls)
+			activeUsersTrend = calculateTrend(metrics.ActiveUsers, previousMetrics.ActiveUsers)
+		}
+		
+		// Calculate server health score (based on uptime and response time)
+		healthScore := calculateHealthScore(metrics.UptimePercentage, metrics.ResponseTimeP50)
+		var previousHealthScore float64
+		if previousMetrics != nil {
+			previousHealthScore = calculateHealthScore(previousMetrics.UptimePercentage, previousMetrics.ResponseTimeP50)
+		}
+		healthTrend := calculateTrendFloat(healthScore, previousHealthScore)
+
+		// Get hot server
+		var hottestServer *stats.ServerQuickStat
+		if len(trending) > 0 {
+			hottestServer = &stats.ServerQuickStat{
+				ServerID:   trending[0].ServerID,
+				ServerName: trending[0].ServerName,
+				Value:      fmt.Sprintf("%.1f/hr", trending[0].InstallVelocity),
+				Label:      "installs/hour",
+			}
+		}
+
+		// Get newest server
+		recentServers, _ := h.statsDB.GetRecentServers(r.Context(), 1, "")
+		var newestServer *stats.ServerQuickStat
+		if len(recentServers) > 0 {
+			server, _ := h.service.GetByID(recentServers[0].ServerID)
+			if server != nil {
+				newestServer = &stats.ServerQuickStat{
+					ServerID:   server.ID,
+					ServerName: server.Name,
+					Value:      "Just added",
+					Label:      time.Since(recentServers[0].FirstSeen).Round(time.Minute).String() + " ago",
+				}
+			}
+		}
+
+		// Build response
+		dashboard := &stats.DashboardMetrics{
+			TotalInstalls: stats.MetricWithTrend{
+				Value:            metrics.TotalInstalls,
+				Trend:            installsTrend,
+				TrendDirection:   getTrendDirection(installsTrend),
+				ComparisonPeriod: getComparisonPeriod(period),
+			},
+			TotalAPICalls: stats.MetricWithTrend{
+				Value:            metrics.TotalAPICalls,
+				Trend:            apiCallsTrend,
+				TrendDirection:   getTrendDirection(apiCallsTrend),
+				ComparisonPeriod: getComparisonPeriod(period),
+			},
+			ActiveUsers: stats.MetricWithTrend{
+				Value:            metrics.ActiveUsers,
+				Trend:            activeUsersTrend,
+				TrendDirection:   getTrendDirection(activeUsersTrend),
+				ComparisonPeriod: getComparisonPeriod(period),
+			},
+			ServerHealth: stats.MetricWithTrend{
+				Value:            fmt.Sprintf("%.1f%%", healthScore),
+				Trend:            healthTrend,
+				TrendDirection:   getTrendDirection(healthTrend),
+				ComparisonPeriod: getComparisonPeriod(period),
+			},
+			NewServersToday:    metrics.NewServers,
+			InstallVelocity:    metrics.InstallVelocity,
+			TopRatedCount:      metrics.FiveStarServers,
+			SearchSuccessRate:  metrics.SearchSuccessRate,
+			InstallTrend:       installTrend,
+			HottestServer:      hottestServer,
+			NewestServer:       newestServer,
+			}
+		
+		// Cache the response
+		h.statsCache.Set(cacheKey, dashboard)
+
+		// Send response
+		if err := WriteCachedResponse(w, dashboard, false); err != nil {
+			WriteStandardError(w, http.StatusInternalServerError, "Failed to encode response")
+		}
+		return
+	}
+	
+	// Get analytics metrics from analytics API
+	metrics, err := h.analyticsClient.GetDashboardMetrics(r.Context(), period)
 	if err != nil {
 		WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get dashboard metrics: %v", err))
 		return
 	}
-
-	// Get trending data
-	trending, _ := h.analyticsDB.CalculateTrending(r.Context(), 1)
 	
-	// Get recent activity for sparklines
-	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timeSeries, _ := h.analyticsDB.GetTimeSeries(r.Context(), startTime, endTime, "day")
+	// The analytics API already returns the data in the correct format
+	// Just need to add the hot and newest server info
 	
-	// Build install trend
-	installTrend := make([]int64, 7)
-	for i, ts := range timeSeries {
-		if i < 7 {
-			installTrend[i] = ts.Installs
-		}
-	}
-
-	// Get comparison data for trends
-	var previousMetrics *stats.AnalyticsMetrics
-	if period == "day" {
-		yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
-		previousMetrics, _ = h.analyticsDB.GetAnalyticsMetrics(r.Context(), yesterday)
-	}
-
-	// Calculate trends
-	var installsTrend, apiCallsTrend, activeUsersTrend float64
-	if previousMetrics != nil {
-		installsTrend = calculateTrend(metrics.TotalInstalls, previousMetrics.TotalInstalls)
-		apiCallsTrend = calculateTrend(metrics.TotalAPICalls, previousMetrics.TotalAPICalls)
-		activeUsersTrend = calculateTrend(metrics.ActiveUsers, previousMetrics.ActiveUsers)
-	}
-	
-	// Calculate server health score (based on uptime and response time)
-	healthScore := calculateHealthScore(metrics.UptimePercentage, metrics.ResponseTimeP50)
-	var previousHealthScore float64
-	if previousMetrics != nil {
-		previousHealthScore = calculateHealthScore(previousMetrics.UptimePercentage, previousMetrics.ResponseTimeP50)
-	}
-	healthTrend := calculateTrendFloat(healthScore, previousHealthScore)
-
-	// Get hot server
+	// Try to get hot server from MongoDB if available
 	var hottestServer *stats.ServerQuickStat
-	if len(trending) > 0 {
-		hottestServer = &stats.ServerQuickStat{
-			ServerID:   trending[0].ServerID,
-			ServerName: trending[0].ServerName,
-			Value:      fmt.Sprintf("%.1f/hr", trending[0].InstallVelocity),
-			Label:      "installs/hour",
-		}
-	}
-
-	// Get newest server
-	recentServers, _ := h.statsDB.GetRecentServers(r.Context(), 1, "")
-	var newestServer *stats.ServerQuickStat
-	if len(recentServers) > 0 {
-		server, _ := h.service.GetByID(recentServers[0].ServerID)
-		if server != nil {
-			newestServer = &stats.ServerQuickStat{
-				ServerID:   server.ID,
-				ServerName: server.Name,
-				Value:      "Just added",
-				Label:      time.Since(recentServers[0].FirstSeen).Round(time.Minute).String() + " ago",
+	if h.analyticsDB != nil {
+		trending, _ := h.analyticsDB.CalculateTrending(r.Context(), 1)
+		if len(trending) > 0 {
+			hottestServer = &stats.ServerQuickStat{
+				ServerID:   trending[0].ServerID,
+				ServerName: trending[0].ServerName,
+				Value:      fmt.Sprintf("%.1f/hr", trending[0].InstallVelocity),
+				Label:      "installs/hour",
 			}
 		}
 	}
 
-	// Build response
-	dashboard := &stats.DashboardMetrics{
-		TotalInstalls: stats.MetricWithTrend{
-			Value:            metrics.TotalInstalls,
-			Trend:            installsTrend,
-			TrendDirection:   getTrendDirection(installsTrend),
-			ComparisonPeriod: getComparisonPeriod(period),
-		},
-		TotalAPICalls: stats.MetricWithTrend{
-			Value:            metrics.TotalAPICalls,
-			Trend:            apiCallsTrend,
-			TrendDirection:   getTrendDirection(apiCallsTrend),
-			ComparisonPeriod: getComparisonPeriod(period),
-		},
-		ActiveUsers: stats.MetricWithTrend{
-			Value:            metrics.ActiveUsers,
-			Trend:            activeUsersTrend,
-			TrendDirection:   getTrendDirection(activeUsersTrend),
-			ComparisonPeriod: getComparisonPeriod(period),
-		},
-		ServerHealth: stats.MetricWithTrend{
-			Value:            fmt.Sprintf("%.1f%%", healthScore),
-			Trend:            healthTrend,
-			TrendDirection:   getTrendDirection(healthTrend),
-			ComparisonPeriod: getComparisonPeriod(period),
-		},
-		NewServersToday:    metrics.NewServers,
-		InstallVelocity:    metrics.InstallVelocity,
-		TopRatedCount:      metrics.FiveStarServers,
-		SearchSuccessRate:  metrics.SearchSuccessRate,
-		InstallTrend:       installTrend,
-		HottestServer:      hottestServer,
-		NewestServer:       newestServer,
+	// Try to get newest server from MongoDB if available
+	var newestServer *stats.ServerQuickStat
+	if h.statsDB != nil {
+		recentServers, _ := h.statsDB.GetRecentServers(r.Context(), 1, "")
+		if len(recentServers) > 0 {
+			server, _ := h.service.GetByID(recentServers[0].ServerID)
+			if server != nil {
+				newestServer = &stats.ServerQuickStat{
+					ServerID:   server.ID,
+					ServerName: server.Name,
+					Value:      "Just added",
+					Label:      time.Since(recentServers[0].FirstSeen).Round(time.Minute).String() + " ago",
+				}
+			}
+		}
 	}
+	
+	// Add the extra fields
+	metrics.HottestServer = hottestServer
+	metrics.NewestServer = newestServer
 
 	// Cache the response
 	h.statsCache.Set(cacheKey, dashboard)
@@ -224,7 +281,47 @@ func (h *VPHandlers) GetActivityFeedHandler(w http.ResponseWriter, r *http.Reque
 	
 	eventType := r.URL.Query().Get("type")
 	
-	// Get recent activity
+	// Check if analytics client is available
+	if h.analyticsClient != nil {
+		// Get recent activity from analytics API
+		activity, err := h.analyticsClient.GetRecentActivity(r.Context(), limit)
+		if err != nil {
+			WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get activity: %v", err))
+			return
+		}
+		
+		// Filter by type if specified
+		if eventType != "" {
+			var filtered []stats.ActivityEvent
+			for _, event := range activity {
+				if event.Type == eventType {
+					filtered = append(filtered, event)
+				}
+			}
+			activity = filtered
+		}
+		
+		// Enrich activity with server names if missing
+		for i := range activity {
+			if activity[i].ServerID != "" && activity[i].ServerName == "" {
+				server, err := h.service.GetByID(activity[i].ServerID)
+				if err == nil {
+					activity[i].ServerName = server.Name
+				}
+			}
+		}
+
+		response := map[string]interface{}{
+			"activity": activity,
+			"count":    len(activity),
+			"type":     eventType,
+		}
+
+		writeJSONResponse(w, response)
+		return
+	}
+	
+	// Fall back to MongoDB
 	activity, err := h.analyticsDB.GetRecentActivity(r.Context(), limit, eventType)
 	if err != nil {
 		WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get activity: %v", err))

@@ -70,8 +70,14 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	}
 	cacheService := stats.NewCacheService(cacheTTL)
 
+	// Initialize analytics client
+	var analyticsClient stats.AnalyticsClient
+	if config.AnalyticsBaseURL != "" {
+		analyticsClient = stats.NewHTTPAnalyticsClient(config.AnalyticsBaseURL)
+	}
+
 	// Initialize handlers
-	vpHandlers := handlers.NewVPHandlers(config.Service, statsDB, feedbackDB, analyticsDB, cacheService, config.AuthService)
+	vpHandlers := handlers.NewVPHandlers(config.Service, statsDB, feedbackDB, analyticsDB, analyticsClient, cacheService, config.AuthService)
 	log.Printf("VPHandlers initialized - analyticsDB is nil: %v", analyticsDB == nil)
 
 	// Server endpoints with stats

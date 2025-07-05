@@ -18,23 +18,25 @@ import (
 
 // VPHandlers contains the handlers for VP (v-plugged) endpoints
 type VPHandlers struct {
-	service      service.RegistryService
-	statsDB      stats.Database
-	feedbackDB   stats.FeedbackDatabase
-	analyticsDB  stats.AnalyticsDatabase
-	statsCache   *stats.CacheService
-	authService  auth.Service
+	service         service.RegistryService
+	statsDB         stats.Database
+	feedbackDB      stats.FeedbackDatabase
+	analyticsDB     stats.AnalyticsDatabase
+	analyticsClient stats.AnalyticsClient
+	statsCache      *stats.CacheService
+	authService     auth.Service
 }
 
 // NewVPHandlers creates a new instance of VPHandlers
-func NewVPHandlers(service service.RegistryService, statsDB stats.Database, feedbackDB stats.FeedbackDatabase, analyticsDB stats.AnalyticsDatabase, statsCache *stats.CacheService, authService auth.Service) *VPHandlers {
+func NewVPHandlers(service service.RegistryService, statsDB stats.Database, feedbackDB stats.FeedbackDatabase, analyticsDB stats.AnalyticsDatabase, analyticsClient stats.AnalyticsClient, statsCache *stats.CacheService, authService auth.Service) *VPHandlers {
 	return &VPHandlers{
-		service:     service,
-		statsDB:     statsDB,
-		feedbackDB:  feedbackDB,
-		analyticsDB: analyticsDB,
-		statsCache:  statsCache,
-		authService: authService,
+		service:         service,
+		statsDB:         statsDB,
+		feedbackDB:      feedbackDB,
+		analyticsDB:     analyticsDB,
+		analyticsClient: analyticsClient,
+		statsCache:      statsCache,
+		authService:     authService,
 	}
 }
 
