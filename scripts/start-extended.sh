@@ -13,9 +13,18 @@ if [ ! -f .env ]; then
     fi
 fi
 
-# Load environment variables
+# Load environment variables safely
 if [ -f .env ]; then
-    export $(cat .env | grep -v '^#' | xargs)
+    # Validate .env file contents before sourcing
+    if grep -q '[;&|$`]' .env; then
+        echo "Error: .env file contains potentially dangerous characters"
+        exit 1
+    fi
+    
+    # Source environment variables safely
+    set -a
+    source .env
+    set +a
 fi
 
 # Build the extended image

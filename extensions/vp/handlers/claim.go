@@ -5,12 +5,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 	vpmodel "github.com/modelcontextprotocol/registry/extensions/vp/model"
+	"github.com/modelcontextprotocol/registry/internal/auth"
 	"github.com/modelcontextprotocol/registry/internal/model"
 )
 
@@ -44,12 +46,18 @@ func (h *VPHandlers) ClaimServerHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// For now, extract username from a custom header or use a placeholder
-	// In production, this should validate the GitHub token properly
-	githubUsername := r.Header.Get("X-GitHub-User")
-	if githubUsername == "" {
-		// TODO: Implement proper GitHub token validation
-		http.Error(w, "GitHub authentication required", http.StatusUnauthorized)
+	// Validate the GitHub token and extract username
+	authInfo := model.Authentication{
+		Method:  model.AuthMethodGitHub,
+		Token:   token,
+		RepoRef: "", // Will be set based on the repository in the claim request
+	}
+	
+	// We'll validate against the repository being claimed after parsing the request
+	// For now, just verify the token is valid
+	valid, err := h.authService.ValidateAuth(r.Context(), authInfo)
+	if err != nil || !valid {
+		http.Error(w, "GitHub authentication failed", http.StatusUnauthorized)
 		return
 	}
 
@@ -77,7 +85,19 @@ func (h *VPHandlers) ClaimServerHandler(w http.ResponseWriter, r *http.Request) 
 	// In production, this would check if the server has an owner/author field
 
 	// Verify the claiming user has access to the repository
-	if !verifyRepositoryAccess(githubUsername, claimReq.PublishRequest.Repository) {
+	// Create a proper server name for GitHub repo verification
+	repoName := fmt.Sprintf("io.github.%s/%s", 
+		extractOwnerFromRepo(claimReq.PublishRequest.Repository.URL),
+		extractRepoFromRepo(claimReq.PublishRequest.Repository.URL))
+	
+	authWithRepo := model.Authentication{
+		Method:  model.AuthMethodGitHub,
+		Token:   token,
+		RepoRef: repoName,
+	}
+	
+	valid, err = h.authService.ValidateAuth(r.Context(), authWithRepo)
+	if err != nil || !valid {
 		http.Error(w, "You don't have access to the specified repository", http.StatusForbidden)
 		return
 	}
@@ -108,7 +128,7 @@ func (h *VPHandlers) ClaimServerHandler(w http.ResponseWriter, r *http.Request) 
 		err := h.statsDB.TransferStats(r.Context(), serverID, serverID, stats.SourceCommunity, stats.SourceRegistry)
 		if err != nil {
 			// Log error but don't fail the claim
-			fmt.Printf("Failed to transfer stats during claim: %v\n", err)
+			log.Printf("Failed to transfer stats during claim: %v", err)
 		} else {
 			// Get the transferred stats
 			transferredStats, _ = h.statsDB.GetStats(r.Context(), serverID, stats.SourceRegistry)
@@ -157,9 +177,8 @@ func (h *VPHandlers) GenerateClaimVerificationHandler(w http.ResponseWriter, r *
 		return
 	}
 
-	// For now, use a placeholder for GitHub user
-	// TODO: Implement proper GitHub token validation
-	githubUsername := "testuser"
+	// This endpoint doesn't require authentication for generating verification codes
+	// In a production system, you might want to add rate limiting
 
 	// Generate verification code
 	codeBytes := make([]byte, 16)
@@ -176,9 +195,8 @@ func (h *VPHandlers) GenerateClaimVerificationHandler(w http.ResponseWriter, r *
 	response := vpmodel.ClaimVerificationResponse{
 		VerificationCode: verificationCode,
 		Instructions: fmt.Sprintf(
-			"Add a file named '.mcp-claim-verification' to the root of your repository with the following content:\n%s\n\nThis code expires in 15 minutes. User: %s",
+			"Add a file named '.mcp-claim-verification' to the root of your repository with the following content:\n%s\n\nThis code expires in 15 minutes.",
 			verificationCode,
-			githubUsername,
 		),
 		ExpiresAt: expiresAt,
 	}
@@ -204,9 +222,27 @@ func validatePublishRequest(req *model.PublishRequest) error {
 	return nil
 }
 
-// verifyRepositoryAccess checks if the user has access to the repository
-func verifyRepositoryAccess(username string, repo model.Repository) bool {
-	// In production, this would make a GitHub API call to verify access
-	// For now, we'll just return true
-	return true
+// extractOwnerFromRepo extracts the owner from a GitHub repository URL
+func extractOwnerFromRepo(repoURL string) string {
+	// Extract from URLs like "https://github.com/owner/repo"
+	parts := strings.Split(repoURL, "/")
+	if len(parts) >= 4 && strings.Contains(repoURL, "github.com") {
+		return parts[len(parts)-2]
+	}
+	return ""
+}
+
+// extractRepoFromRepo extracts the repository name from a GitHub repository URL
+func extractRepoFromRepo(repoURL string) string {
+	// Extract from URLs like "https://github.com/owner/repo"
+	parts := strings.Split(repoURL, "/")
+	if len(parts) >= 4 && strings.Contains(repoURL, "github.com") {
+		repo := parts[len(parts)-1]
+		// Remove .git suffix if present
+		if strings.HasSuffix(repo, ".git") {
+			repo = strings.TrimSuffix(repo, ".git")
+		}
+		return repo
+	}
+	return ""
 }

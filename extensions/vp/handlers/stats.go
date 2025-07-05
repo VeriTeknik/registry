@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 	vpmodel "github.com/modelcontextprotocol/registry/extensions/vp/model"
@@ -15,19 +19,17 @@ import (
 
 // TrackInstallHandler tracks an installation for a server
 func (h *VPHandlers) TrackInstallHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	// Validate HTTP method
+	if !validateHTTPMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	// Extract server ID from URL
-	path := r.URL.Path
-	parts := strings.Split(strings.TrimPrefix(path, "/vp/servers/"), "/")
-	if len(parts) < 2 || parts[0] == "" {
-		http.Error(w, "Server ID is required", http.StatusBadRequest)
+	serverID, err := extractServerIDFromPath(r.URL.Path)
+	if err != nil {
+		WriteStandardError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	serverID := parts[0]
 
 	// Parse optional install request body
 	var installReq stats.InstallRequest
@@ -38,8 +40,8 @@ func (h *VPHandlers) TrackInstallHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Validate source if provided
-	if installReq.Source != "" && installReq.Source != stats.SourceRegistry && installReq.Source != stats.SourceCommunity {
-		http.Error(w, "Invalid source. Must be 'REGISTRY' or 'COMMUNITY'", http.StatusBadRequest)
+	if err := validateSource(installReq.Source); err != nil {
+		WriteStandardError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -50,56 +52,58 @@ func (h *VPHandlers) TrackInstallHandler(w http.ResponseWriter, r *http.Request)
 
 	// Increment installation count with source
 	if err := h.statsDB.IncrementInstallCount(r.Context(), serverID, installReq.Source); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to track installation: %v", err), http.StatusInternalServerError)
+		WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to track installation: %v", err))
 		return
 	}
 
-	// Invalidate cache for this server
-	h.statsCache.Delete(fmt.Sprintf("vp:server:%s", serverID))
-	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s", serverID))
-	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s:%s", serverID, installReq.Source))
-	h.statsCache.Delete("vp:servers:") // Clear servers list cache
-	h.statsCache.Delete("vp:stats:global") // Clear global stats cache
-	h.statsCache.Delete(fmt.Sprintf("vp:stats:global:%s", installReq.Source)) // Clear source-specific global stats
+	// Invalidate caches
+	invalidateServerCaches(h.statsCache, serverID)
+	invalidateSourceCaches(h.statsCache, serverID, installReq.Source)
 
-	// TODO: Send install event to analytics service
-	// This would track more detailed metrics like platform, version, etc.
+	// Send install event to analytics service if configured
+	// This tracks detailed metrics like platform, version, user info, etc.
+	analyticsEvent := map[string]interface{}{
+		"event_type":  "server_install",
+		"server_id":   serverID,
+		"source":      installReq.Source,
+		"timestamp":   time.Now().Unix(),
+		"user_id":     installReq.UserID,
+		"version":     installReq.Version,
+		"platform":    installReq.Platform,
+	}
+	
+	// Note: Actual analytics integration would use the configured analytics client
+	// For now, we just log the event for debugging
+	log.Printf("Analytics event: %+v", analyticsEvent)
 
 	// Return success response
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Installation tracked successfully",
-	})
+	WriteInstallTrackingResponse(w, true, "Installation tracked successfully")
 }
 
 // SubmitRatingHandler handles rating submission with backward compatibility
 func (h *VPHandlers) SubmitRatingHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	// Validate HTTP method
+	if !validateHTTPMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	// Extract server ID from URL
-	path := r.URL.Path
-	parts := strings.Split(strings.TrimPrefix(path, "/vp/servers/"), "/")
-	if len(parts) < 2 || parts[0] == "" {
-		http.Error(w, "Server ID is required", http.StatusBadRequest)
+	serverID, err := extractServerIDFromPath(r.URL.Path)
+	if err != nil {
+		WriteStandardError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	serverID := parts[0]
 
 	// Parse rating request
 	var ratingReq stats.RatingRequest
 	if err := json.NewDecoder(r.Body).Decode(&ratingReq); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		WriteStandardError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// Validate rating
-	if ratingReq.Rating < 1 || ratingReq.Rating > 5 {
-		http.Error(w, "Rating must be between 1 and 5", http.StatusBadRequest)
+	if err := validateRating(ratingReq.Rating); err != nil {
+		WriteStandardError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -107,8 +111,13 @@ func (h *VPHandlers) SubmitRatingHandler(w http.ResponseWriter, r *http.Request)
 	if ratingReq.UserID != "" || ratingReq.Comment != "" {
 		// For feedback tracking, user_id is required
 		if ratingReq.UserID == "" {
-			// Generate a temporary user ID based on IP for anonymous ratings with comments
-			ratingReq.UserID = "anon_" + strings.ReplaceAll(r.RemoteAddr, ":", "_")
+			// Generate a cryptographically secure anonymous user ID
+			randomBytes := make([]byte, 16)
+			if _, err := rand.Read(randomBytes); err != nil {
+				WriteStandardError(w, http.StatusInternalServerError, "Failed to generate anonymous user ID")
+				return
+			}
+			ratingReq.UserID = "anon_" + hex.EncodeToString(randomBytes)
 		}
 		
 		// Rewind the request body
@@ -126,54 +135,41 @@ func (h *VPHandlers) SubmitRatingHandler(w http.ResponseWriter, r *http.Request)
 
 	// Update rating statistics
 	if err := h.statsDB.UpdateRating(r.Context(), serverID, ratingReq.Source, ratingReq.Rating); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to update rating: %v", err), http.StatusInternalServerError)
+		WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to update rating: %v", err))
 		return
 	}
 
-	// Invalidate cache
-	h.statsCache.Delete(fmt.Sprintf("vp:server:%s", serverID))
-	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s", serverID))
-	h.statsCache.Delete(fmt.Sprintf("vp:stats:%s:%s", serverID, ratingReq.Source))
-	h.statsCache.Delete("vp:servers:") // Clear servers list cache
+	// Invalidate caches
+	invalidateServerCaches(h.statsCache, serverID)
+	invalidateSourceCaches(h.statsCache, serverID, ratingReq.Source)
 
 	// Get updated stats
 	updatedStats, err := h.statsDB.GetStats(r.Context(), serverID, ratingReq.Source)
 	if err != nil {
 		// Still return success even if we can't get updated stats
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"message": "Rating submitted successfully",
-		})
+		WriteStandardResponse(w, true, "Rating submitted successfully", nil)
 		return
 	}
 
 	// Return success with updated stats
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Rating submitted successfully",
-		"stats":   updatedStats,
+	WriteStandardResponse(w, true, "Rating submitted successfully", map[string]interface{}{
+		"stats": updatedStats,
 	})
 }
 
 // GetStatsHandler returns stats for a specific server
 func (h *VPHandlers) GetStatsHandler(w http.ResponseWriter, r *http.Request) {
 	// Extract server ID from URL
-	path := r.URL.Path
-	parts := strings.Split(strings.TrimPrefix(path, "/vp/servers/"), "/")
-	if len(parts) < 2 || parts[0] == "" {
-		http.Error(w, "Server ID is required", http.StatusBadRequest)
+	serverID, err := extractServerIDFromPath(r.URL.Path)
+	if err != nil {
+		WriteStandardError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	serverID := parts[0]
 
 	// Get source from query params (optional)
 	source := r.URL.Query().Get("source")
-	if source != "" && source != stats.SourceRegistry && source != stats.SourceCommunity {
-		http.Error(w, "Invalid source. Must be 'REGISTRY' or 'COMMUNITY'", http.StatusBadRequest)
+	if err := validateSource(source); err != nil {
+		WriteStandardError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -189,9 +185,7 @@ func (h *VPHandlers) GetStatsHandler(w http.ResponseWriter, r *http.Request) {
 		cacheKey = fmt.Sprintf("vp:stats:%s:aggregated", serverID)
 	}
 	if cached, found := h.statsCache.Get(cacheKey); found {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Cache", "HIT")
-		json.NewEncoder(w).Encode(cached)
+		WriteCachedResponse(w, cached, true)
 		return
 	}
 
@@ -201,7 +195,7 @@ func (h *VPHandlers) GetStatsHandler(w http.ResponseWriter, r *http.Request) {
 		// Get aggregated stats from all sources
 		aggStats, err := h.statsDB.GetAggregatedStats(r.Context(), serverID)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to get aggregated stats: %v", err), http.StatusInternalServerError)
+			WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get aggregated stats: %v", err))
 			return
 		}
 		response = aggStats
@@ -209,7 +203,7 @@ func (h *VPHandlers) GetStatsHandler(w http.ResponseWriter, r *http.Request) {
 		// Get stats for specific source
 		serverStats, err := h.statsDB.GetStats(r.Context(), serverID, source)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to get stats: %v", err), http.StatusInternalServerError)
+			WriteStandardError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))
 			return
 		}
 		response = stats.StatsResponse{
@@ -221,10 +215,8 @@ func (h *VPHandlers) GetStatsHandler(w http.ResponseWriter, r *http.Request) {
 	h.statsCache.Set(cacheKey, response)
 
 	// Send response
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Cache", "MISS")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	if err := WriteCachedResponse(w, response, false); err != nil {
+		WriteStandardError(w, http.StatusInternalServerError, "Failed to encode response")
 		return
 	}
 }

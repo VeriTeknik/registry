@@ -131,6 +131,7 @@ func main() {
 				MongoClient:      mongoClient,
 				DatabaseName:     cfg.DatabaseName,
 				AnalyticsBaseURL: os.Getenv("MCP_REGISTRY_ANALYTICS_URL"),
+				AuthService:      authService,
 			}
 			
 			log.Printf("Setting up extended routes with database: %s", cfg.DatabaseName)

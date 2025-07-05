@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 	"github.com/modelcontextprotocol/registry/extensions/vp/handlers"
+	"github.com/modelcontextprotocol/registry/internal/auth"
 	"github.com/modelcontextprotocol/registry/internal/service"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -22,6 +23,7 @@ type Config struct {
 	DatabaseName     string
 	CacheTTL         time.Duration
 	AnalyticsBaseURL string
+	AuthService      auth.Service
 }
 
 // SetupVPRoutes sets up all VP (v-plugged) routes
@@ -57,7 +59,7 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	cacheService := stats.NewCacheService(cacheTTL)
 
 	// Initialize handlers
-	vpHandlers := handlers.NewVPHandlers(config.Service, statsDB, feedbackDB, cacheService)
+	vpHandlers := handlers.NewVPHandlers(config.Service, statsDB, feedbackDB, cacheService, config.AuthService)
 
 	// Server endpoints with stats
 	mux.HandleFunc("/vp/servers", vpHandlers.GetServersHandler)
@@ -70,8 +72,7 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 		// Extract path segments
 		segments := strings.Split(strings.TrimPrefix(path, "/vp/servers/"), "/")
 		
-		// Debug logging for ALL requests
-		log.Printf("VP Route Debug - Method: %s, Path: %s, Segments: %v, Len: %d", r.Method, path, segments, len(segments))
+		// Debug logging removed for security - was exposing request details in production logs
 		
 		// Handle feedback endpoints first (more specific)
 		if len(segments) >= 2 && segments[1] == "feedback" {

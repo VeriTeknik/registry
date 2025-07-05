@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 	vpmodel "github.com/modelcontextprotocol/registry/extensions/vp/model"
+	"github.com/modelcontextprotocol/registry/internal/auth"
 	"github.com/modelcontextprotocol/registry/internal/model"
 	"github.com/modelcontextprotocol/registry/internal/service"
 )
@@ -20,15 +22,17 @@ type VPHandlers struct {
 	statsDB      stats.Database
 	feedbackDB   stats.FeedbackDatabase
 	statsCache   *stats.CacheService
+	authService  auth.Service
 }
 
 // NewVPHandlers creates a new instance of VPHandlers
-func NewVPHandlers(service service.RegistryService, statsDB stats.Database, feedbackDB stats.FeedbackDatabase, statsCache *stats.CacheService) *VPHandlers {
+func NewVPHandlers(service service.RegistryService, statsDB stats.Database, feedbackDB stats.FeedbackDatabase, statsCache *stats.CacheService, authService auth.Service) *VPHandlers {
 	return &VPHandlers{
-		service:    service,
-		statsDB:    statsDB,
-		feedbackDB: feedbackDB,
-		statsCache: statsCache,
+		service:     service,
+		statsDB:     statsDB,
+		feedbackDB:  feedbackDB,
+		statsCache:  statsCache,
+		authService: authService,
 	}
 }
 
@@ -92,7 +96,7 @@ func (h *VPHandlers) GetServersHandler(w http.ResponseWriter, r *http.Request) {
 	statsMap, err := h.statsDB.GetBatchStats(r.Context(), serverIDs, source)
 	if err != nil {
 		// Log error but continue without stats
-		fmt.Printf("Failed to get stats: %v\n", err)
+		log.Printf("Failed to get stats: %v", err)
 		statsMap = make(map[string]*stats.ServerStats)
 	}
 
@@ -155,7 +159,7 @@ func (h *VPHandlers) GetServerByIDHandler(w http.ResponseWriter, r *http.Request
 	serverStats, err := h.statsDB.GetStats(r.Context(), serverID, source)
 	if err != nil {
 		// Log error but continue without stats
-		fmt.Printf("Failed to get stats for server %s: %v\n", serverID, err)
+		log.Printf("Failed to get stats for server %s: %v", serverID, err)
 		serverStats = &stats.ServerStats{ServerID: serverID, Source: source}
 	}
 

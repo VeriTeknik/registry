@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ func (h *VPHandlers) SubmitFeedbackHandler(w http.ResponseWriter, r *http.Reques
 
 	// Check if feedback database is initialized
 	if h.feedbackDB == nil {
-		fmt.Printf("Warning: Feedback database not initialized in SubmitFeedbackHandler\n")
+		log.Printf("Warning: Feedback database not initialized in SubmitFeedbackHandler")
 		// Fall back to basic rating without feedback tracking
 		h.handleBasicRating(w, r)
 		return
@@ -38,13 +39,13 @@ func (h *VPHandlers) SubmitFeedbackHandler(w http.ResponseWriter, r *http.Reques
 	// Parse rating request
 	var ratingReq stats.RatingRequest
 	if err := json.NewDecoder(r.Body).Decode(&ratingReq); err != nil {
-		fmt.Printf("Error decoding rating request: %v\n", err)
+		log.Printf("Error decoding rating request: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	
 	// Debug log
-	fmt.Printf("Received rating request: %+v\n", ratingReq)
+	log.Printf("Received rating request: %+v", ratingReq)
 
 	// Validate rating
 	if ratingReq.Rating < 1 || ratingReq.Rating > 5 {
@@ -118,7 +119,7 @@ func (h *VPHandlers) SubmitFeedbackHandler(w http.ResponseWriter, r *http.Reques
 	// Update rating statistics with source
 	if err := h.statsDB.UpdateRating(r.Context(), serverID, ratingReq.Source, ratingReq.Rating); err != nil {
 		// Log error but don't fail the request
-		fmt.Printf("Failed to update stats: %v\n", err)
+		log.Printf("Failed to update stats: %v", err)
 	}
 
 	// Invalidate cache
@@ -161,11 +162,11 @@ func (h *VPHandlers) GetServerFeedbackHandler(w http.ResponseWriter, r *http.Req
 	serverID := parts[0]
 	
 	// Log for debugging
-	fmt.Printf("GetServerFeedbackHandler called - ServerID: %s, Path: %s\n", serverID, path)
+	log.Printf("GetServerFeedbackHandler called - ServerID: %s, Path: %s", serverID, path)
 	
 	// Check if feedback database is initialized
 	if h.feedbackDB == nil {
-		fmt.Printf("Error: Feedback database is nil in GetServerFeedbackHandler\n")
+		log.Printf("Error: Feedback database is nil in GetServerFeedbackHandler")
 		http.Error(w, "Feedback service unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -215,7 +216,7 @@ func (h *VPHandlers) GetServerFeedbackHandler(w http.ResponseWriter, r *http.Req
 	// Get feedback from database
 	feedbackResponse, err := h.feedbackDB.GetServerFeedback(r.Context(), serverID, source, limit, offset, sort)
 	if err != nil {
-		fmt.Printf("Error getting feedback for server %s: %v\n", serverID, err)
+		log.Printf("Error getting feedback for server %s: %v", serverID, err)
 		// Return empty response on error
 		feedbackResponse = &stats.FeedbackResponse{
 			Feedback:   []*stats.ServerFeedback{},
@@ -352,7 +353,7 @@ func (h *VPHandlers) UpdateFeedbackHandler(w http.ResponseWriter, r *http.Reques
 	// Update rating statistics
 	if err := h.statsDB.UpdateRating(r.Context(), serverID, existingFeedback.Source, updateReq.Rating); err != nil {
 		// Log error but don't fail the request
-		fmt.Printf("Failed to update stats: %v\n", err)
+		log.Printf("Failed to update stats: %v", err)
 	}
 
 	// Invalidate cache
@@ -402,7 +403,11 @@ func (h *VPHandlers) DeleteFeedbackHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// TODO: Recalculate rating statistics after deletion
+	// Recalculate rating statistics after deletion
+	if err := h.statsDB.RecalculateRating(r.Context(), serverID, feedback.Source); err != nil {
+		log.Printf("Failed to recalculate rating statistics for server %s: %v", serverID, err)
+		// Don't fail the request, just log the error
+	}
 
 	// Invalidate cache
 	h.invalidateFeedbackCache(serverID, "")

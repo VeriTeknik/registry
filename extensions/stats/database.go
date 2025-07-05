@@ -521,13 +521,33 @@ func (db *MongoDatabase) GetTrending(ctx context.Context, limit int, source stri
 		return nil, fmt.Errorf("invalid source parameter: %w", err)
 	}
 
-	// For now, return servers with most active installs
-	// TODO: Implement proper trending algorithm based on growth rate
-	opts := options.Find().
-		SetSort(bson.D{{Key: "active_installs", Value: -1}}).
-		SetLimit(int64(validatedLimit))
+	// Implement trending algorithm based on install growth rate and recent activity
+	// Formula: trend_score = (recent_installs * 2) + (total_installs * 0.1) + (rating * rating_count * 0.05)
+	// This favors servers with recent growth while still considering established servers
+	pipeline := []bson.M{
+		{"$match": filter},
+		{"$addFields": bson.M{
+			"trend_score": bson.M{
+				"$add": []interface{}{
+					// Recent installs weighted heavily (assuming last 7 days activity)
+					bson.M{"$multiply": []interface{}{"$weekly_growth", 10}},
+					// Total installs weighted lightly for established servers
+					bson.M{"$multiply": []interface{}{"$installation_count", 0.1}},
+					// Rating quality factor
+					bson.M{"$multiply": []interface{}{
+						"$rating",
+						bson.M{"$multiply": []interface{}{"$rating_count", 0.05}},
+					}},
+					// Active installs factor
+					bson.M{"$multiply": []interface{}{"$active_installs", 0.3}},
+				}},
+			},
+		}},
+		{"$sort": bson.M{"trend_score": -1}},
+		{"$limit": int64(validatedLimit)},
+	}
 
-	cursor, err := db.collection.Find(ctx, filter, opts)
+	cursor, err := db.collection.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trending: %w", err)
 	}

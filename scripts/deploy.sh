@@ -5,9 +5,15 @@ set -e
 # This script performs zero-downtime deployment with health checks and rollback capability
 
 COMPOSE_PROJECT_NAME="registry"
-HEALTH_CHECK_URL="https://registry.plugged.in/v0/health"
-DEPLOY_TIMEOUT=300
+HEALTH_CHECK_URL="${REGISTRY_HEALTH_URL:-https://registry.plugged.in/v0/health}"
+DEPLOY_TIMEOUT="${DEPLOY_TIMEOUT:-300}"
 BACKUP_TAG="backup-$(date +%Y%m%d-%H%M%S)"
+
+# Validate required environment variables
+if [ -z "$HEALTH_CHECK_URL" ]; then
+    echo "Error: REGISTRY_HEALTH_URL environment variable is required"
+    exit 1
+fi
 
 echo "🚀 Starting deployment..."
 
@@ -106,8 +112,15 @@ main() {
     
     # Step 7: Clean up backup images (keep last 3)
     echo "🧹 Cleaning up old backup images..."
-    docker images | grep "registry-extended.*backup-" | tail -n +4 | awk '{print $2}' | xargs -r docker rmi registry-extended: || true
-    docker images | grep "registry.*backup-" | tail -n +4 | awk '{print $2}' | xargs -r docker rmi registry: || true
+    # Cleanup extended registry backups
+    docker images --format "table {{.Repository}}:{{.Tag}}" | grep "^registry-extended:backup-" | tail -n +4 | while read -r image; do
+        docker rmi "$image" || true
+    done
+    
+    # Cleanup registry backups
+    docker images --format "table {{.Repository}}:{{.Tag}}" | grep "^registry:backup-" | tail -n +4 | while read -r image; do
+        docker rmi "$image" || true
+    done
     
     # Step 8: Prune unused resources
     docker system prune -f --volumes

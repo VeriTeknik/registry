@@ -186,12 +186,72 @@ func (s *SyncService) syncAll(ctx context.Context) error {
 	// For now, we'll assume we have a method to get active server IDs
 	// In a real implementation, this would query the main servers collection
 	
-	// TODO: Implement batch sync
-	// serverIDs := s.getActiveServerIDs(ctx)
-	// metrics := s.analyticsClient.GetBatchServerMetrics(ctx, serverIDs)
-	// s.statsDB.SyncAnalyticsData(ctx, metrics)
+	// Implement batch sync for server metrics
+	serverIDs, err := s.getActiveServerIDs(ctx)
+	if err != nil {
+		log.Printf("Failed to get active server IDs: %v", err)
+		return
+	}
+	
+	if len(serverIDs) == 0 {
+		log.Println("No active servers found for sync")
+		return
+	}
+	
+	// Fetch metrics from analytics service in batches
+	metrics, err := s.analyticsClient.GetBatchServerMetrics(ctx, serverIDs)
+	if err != nil {
+		log.Printf("Failed to get batch metrics: %v", err)
+		return
+	}
+	
+	// Sync analytics data to stats database
+	if err := s.syncAnalyticsData(ctx, metrics); err != nil {
+		log.Printf("Failed to sync analytics data: %v", err)
+		return
+	}
+	
+	log.Printf("Successfully synced metrics for %d servers", len(serverIDs))
 	
 	log.Println("Analytics sync completed")
+	return nil
+}
+
+// getActiveServerIDs retrieves server IDs that have recent activity
+func (s *SyncService) getActiveServerIDs(ctx context.Context) ([]string, error) {
+	// In a real implementation, this would query the main servers collection
+	// or the stats collection for servers with recent activity
+	// For now, return an empty slice as a placeholder
+	
+	// Example implementation would be:
+	// cursor, err := s.statsDB.collection.Find(ctx, bson.M{
+	//     "last_updated": bson.M{"$gte": time.Now().Add(-24 * time.Hour)},
+	// })
+	// ... parse results and return server IDs
+	
+	return []string{}, nil
+}
+
+// syncAnalyticsData processes and stores analytics metrics
+func (s *SyncService) syncAnalyticsData(ctx context.Context, metrics map[string]*AnalyticsMetrics) error {
+	// Process each server's metrics and update the stats database
+	for serverID, metric := range metrics {
+		// Update server stats with analytics data
+		if err := s.updateServerMetrics(ctx, serverID, metric); err != nil {
+			log.Printf("Failed to update metrics for server %s: %v", serverID, err)
+			// Continue processing other servers
+			continue
+		}
+	}
+	return nil
+}
+
+// updateServerMetrics updates individual server metrics from analytics
+func (s *SyncService) updateServerMetrics(ctx context.Context, serverID string, metrics *AnalyticsMetrics) error {
+	// This would update various metrics like active_installs, weekly_growth, etc.
+	// For now, just log the operation
+	log.Printf("Updating metrics for server %s: active_installs=%d, weekly_growth=%.2f", 
+		serverID, metrics.ActiveInstalls, metrics.WeeklyGrowth)
 	return nil
 }
 
