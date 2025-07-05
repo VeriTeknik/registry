@@ -540,7 +540,7 @@ func (db *MongoDatabase) GetTrending(ctx context.Context, limit int, source stri
 					}},
 					// Active installs factor
 					bson.M{"$multiply": []interface{}{"$active_installs", 0.3}},
-				}},
+				},
 			},
 		}},
 		{"$sort": bson.M{"trend_score": -1}},

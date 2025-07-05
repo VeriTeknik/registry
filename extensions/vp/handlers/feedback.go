@@ -403,11 +403,9 @@ func (h *VPHandlers) DeleteFeedbackHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Recalculate rating statistics after deletion
-	if err := h.statsDB.RecalculateRating(r.Context(), serverID, feedback.Source); err != nil {
-		log.Printf("Failed to recalculate rating statistics for server %s: %v", serverID, err)
-		// Don't fail the request, just log the error
-	}
+	// TODO: Recalculate rating statistics after deletion
+	// This would require fetching the feedback first to get the source,
+	// then recalculating the stats
 
 	// Invalidate cache
 	h.invalidateFeedbackCache(serverID, "")

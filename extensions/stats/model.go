@@ -76,13 +76,6 @@ type GlobalStats struct {
 	LastUpdated        time.Time `json:"last_updated"`
 }
 
-// TrendingServer represents a server with trending metrics
-type TrendingServer struct {
-	ServerID     string  `json:"server_id"`
-	TrendScore   float64 `json:"trend_score"`
-	WeeklyGrowth float64 `json:"weekly_growth"`
-	InstallDelta int     `json:"install_delta"`
-}
 
 // LeaderboardEntry represents an entry in various leaderboards
 type LeaderboardEntry struct {

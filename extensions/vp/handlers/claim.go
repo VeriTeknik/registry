@@ -12,7 +12,6 @@ import (
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
 	vpmodel "github.com/modelcontextprotocol/registry/extensions/vp/model"
-	"github.com/modelcontextprotocol/registry/internal/auth"
 	"github.com/modelcontextprotocol/registry/internal/model"
 )
 
@@ -75,8 +74,7 @@ func (h *VPHandlers) ClaimServerHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Get the community server being claimed to verify it exists
-	_, err := h.service.GetByID(serverID)
-	if err != nil {
+	if _, err := h.service.GetByID(serverID); err != nil {
 		http.Error(w, "Server not found", http.StatusNotFound)
 		return
 	}

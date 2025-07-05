@@ -10,6 +10,9 @@ docker compose -f docker-compose.proxy.yml up -d
 echo "Waiting for Traefik to be ready..."
 sleep 5
 
+echo "Building extended registry image..."
+docker build -t registry-extended:latest -f extensions/Dockerfile .
+
 echo "Starting Registry and MongoDB..."
 # Stop any existing registry containers first to avoid conflicts
 docker stop registry-extended 2>/dev/null || true

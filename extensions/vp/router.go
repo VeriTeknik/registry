@@ -50,6 +50,18 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 		return fmt.Errorf("failed to initialize feedback database: %w", err)
 	}
 	log.Println("Feedback database initialized successfully")
+	
+	// Initialize analytics database
+	log.Printf("Initializing analytics database with database name: %s", config.DatabaseName)
+	analyticsDB, err := stats.NewMongoAnalyticsDatabase(config.MongoClient, config.DatabaseName)
+	if err != nil {
+		log.Printf("ERROR: Failed to initialize analytics database: %v", err)
+		// Don't return error - continue without analytics
+		analyticsDB = nil
+		log.Println("WARNING: Analytics endpoints will not be available")
+	} else {
+		log.Println("Analytics database initialized successfully")
+	}
 
 	// Initialize cache service
 	cacheTTL := config.CacheTTL
@@ -59,7 +71,8 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	cacheService := stats.NewCacheService(cacheTTL)
 
 	// Initialize handlers
-	vpHandlers := handlers.NewVPHandlers(config.Service, statsDB, feedbackDB, cacheService, config.AuthService)
+	vpHandlers := handlers.NewVPHandlers(config.Service, statsDB, feedbackDB, analyticsDB, cacheService, config.AuthService)
+	log.Printf("VPHandlers initialized - analyticsDB is nil: %v", analyticsDB == nil)
 
 	// Server endpoints with stats
 	mux.HandleFunc("/vp/servers", vpHandlers.GetServersHandler)
@@ -138,6 +151,28 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	// Recent servers endpoints
 	mux.HandleFunc("/vp/servers/recent", vpHandlers.GetRecentServersHandler)
 	mux.HandleFunc("/vp/admin/timeline", vpHandlers.GetServerTimelineHandler)
+	
+	// Test endpoint to verify routing
+	mux.HandleFunc("/vp/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "test endpoint works"})
+	})
+	
+	// Analytics endpoints - register more specific paths first
+	if analyticsDB != nil {
+		log.Println("Registering analytics endpoints...")
+		mux.HandleFunc("/vp/analytics/dashboard", vpHandlers.GetDashboardMetricsHandler)
+		mux.HandleFunc("/vp/analytics/activity", vpHandlers.GetActivityFeedHandler)
+		mux.HandleFunc("/vp/analytics/growth", vpHandlers.GetGrowthMetricsHandler)
+		mux.HandleFunc("/vp/analytics/api-metrics", vpHandlers.GetAPIMetricsHandler)
+		mux.HandleFunc("/vp/analytics/search", vpHandlers.GetSearchAnalyticsHandler)
+		mux.HandleFunc("/vp/analytics/time-series", vpHandlers.GetTimeSeriesHandler)
+		mux.HandleFunc("/vp/analytics/hot", vpHandlers.GetHotServersHandler)
+		mux.HandleFunc("/vp/analytics", vpHandlers.GetAnalyticsHandler) // Base analytics endpoint last
+		log.Printf("Analytics endpoints registered: /vp/analytics/*, /vp/analytics/dashboard, etc.")
+	} else {
+		log.Println("Skipping analytics endpoints registration - analytics database not initialized")
+	}
 	
 	// Register feedback endpoints separately to ensure they work
 	// This is a temporary workaround for the routing issue

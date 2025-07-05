@@ -13,12 +13,12 @@ import (
 
 // AnalyticsClient interface for fetching analytics data
 type AnalyticsClient interface {
-	GetServerMetrics(ctx context.Context, serverID string) (*AnalyticsMetrics, error)
-	GetBatchServerMetrics(ctx context.Context, serverIDs []string) (map[string]*AnalyticsMetrics, error)
+	GetServerMetrics(ctx context.Context, serverID string) (*ServerAnalyticsMetrics, error)
+	GetBatchServerMetrics(ctx context.Context, serverIDs []string) (map[string]*ServerAnalyticsMetrics, error)
 }
 
-// AnalyticsMetrics represents metrics from the analytics service
-type AnalyticsMetrics struct {
+// ServerAnalyticsMetrics represents metrics from the analytics service for a specific server
+type ServerAnalyticsMetrics struct {
 	ServerID           string    `json:"server_id"`
 	ActiveInstalls     int       `json:"active_installs"`
 	DailyActiveUsers   int       `json:"daily_active_users"`
@@ -44,7 +44,7 @@ func NewHTTPAnalyticsClient(baseURL string) *HTTPAnalyticsClient {
 }
 
 // GetServerMetrics fetches metrics for a single server
-func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID string) (*AnalyticsMetrics, error) {
+func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID string) (*ServerAnalyticsMetrics, error) {
 	url := fmt.Sprintf("%s/api/v1/servers/%s/metrics", c.baseURL, url.PathEscape(serverID))
 	
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -62,7 +62,7 @@ func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID str
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var metrics AnalyticsMetrics
+	var metrics ServerAnalyticsMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
@@ -71,13 +71,13 @@ func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID str
 }
 
 // GetBatchServerMetrics fetches metrics for multiple servers
-func (c *HTTPAnalyticsClient) GetBatchServerMetrics(ctx context.Context, serverIDs []string) (map[string]*AnalyticsMetrics, error) {
+func (c *HTTPAnalyticsClient) GetBatchServerMetrics(ctx context.Context, serverIDs []string) (map[string]*ServerAnalyticsMetrics, error) {
 	// For simplicity, fetch in parallel with limited concurrency
 	const maxConcurrency = 10
 	sem := make(chan struct{}, maxConcurrency)
 	
 	var mu sync.Mutex
-	results := make(map[string]*AnalyticsMetrics)
+	results := make(map[string]*ServerAnalyticsMetrics)
 	var wg sync.WaitGroup
 	
 	for _, serverID := range serverIDs {
@@ -190,25 +190,25 @@ func (s *SyncService) syncAll(ctx context.Context) error {
 	serverIDs, err := s.getActiveServerIDs(ctx)
 	if err != nil {
 		log.Printf("Failed to get active server IDs: %v", err)
-		return
+		return nil
 	}
 	
 	if len(serverIDs) == 0 {
 		log.Println("No active servers found for sync")
-		return
+		return nil
 	}
 	
 	// Fetch metrics from analytics service in batches
 	metrics, err := s.analyticsClient.GetBatchServerMetrics(ctx, serverIDs)
 	if err != nil {
 		log.Printf("Failed to get batch metrics: %v", err)
-		return
+		return nil
 	}
 	
 	// Sync analytics data to stats database
 	if err := s.syncAnalyticsData(ctx, metrics); err != nil {
 		log.Printf("Failed to sync analytics data: %v", err)
-		return
+		return nil
 	}
 	
 	log.Printf("Successfully synced metrics for %d servers", len(serverIDs))
@@ -233,7 +233,7 @@ func (s *SyncService) getActiveServerIDs(ctx context.Context) ([]string, error) 
 }
 
 // syncAnalyticsData processes and stores analytics metrics
-func (s *SyncService) syncAnalyticsData(ctx context.Context, metrics map[string]*AnalyticsMetrics) error {
+func (s *SyncService) syncAnalyticsData(ctx context.Context, metrics map[string]*ServerAnalyticsMetrics) error {
 	// Process each server's metrics and update the stats database
 	for serverID, metric := range metrics {
 		// Update server stats with analytics data
@@ -247,7 +247,7 @@ func (s *SyncService) syncAnalyticsData(ctx context.Context, metrics map[string]
 }
 
 // updateServerMetrics updates individual server metrics from analytics
-func (s *SyncService) updateServerMetrics(ctx context.Context, serverID string, metrics *AnalyticsMetrics) error {
+func (s *SyncService) updateServerMetrics(ctx context.Context, serverID string, metrics *ServerAnalyticsMetrics) error {
 	// This would update various metrics like active_installs, weekly_growth, etc.
 	// For now, just log the operation
 	log.Printf("Updating metrics for server %s: active_installs=%d, weekly_growth=%.2f", 
