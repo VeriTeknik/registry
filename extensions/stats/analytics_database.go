@@ -777,6 +777,8 @@ func (db *MongoAnalyticsDatabase) GetGrowthMetrics(ctx context.Context, metric s
 		growth.CurrentValue, growth.PreviousValue = db.calculateServerGrowth(ctx, currentPeriodStart, now, previousPeriodStart, previousPeriodEnd)
 	case "ratings":
 		growth.CurrentValue, growth.PreviousValue = db.calculateRatingGrowth(ctx, currentPeriodStart, now, previousPeriodStart, previousPeriodEnd)
+	case "searches":
+		growth.CurrentValue, growth.PreviousValue = db.calculateSearchGrowth(ctx, currentPeriodStart, now, previousPeriodStart, previousPeriodEnd)
 	default:
 		return nil, fmt.Errorf("unsupported metric: %s", metric)
 	}
@@ -814,6 +816,8 @@ func (db *MongoAnalyticsDatabase) GetGrowthMetrics(ctx context.Context, metric s
 		momentumValue, _ = db.calculateUserGrowth(ctx, momentumPeriodStart, previousPeriodStart, time.Time{}, time.Time{})
 	case "api_calls":
 		momentumValue, _ = db.calculateAPICallGrowth(ctx, momentumPeriodStart, previousPeriodStart, time.Time{}, time.Time{})
+	case "searches":
+		momentumValue, _ = db.calculateSearchGrowth(ctx, momentumPeriodStart, previousPeriodStart, time.Time{}, time.Time{})
 	}
 	
 	if momentumValue > 0 {
@@ -1044,6 +1048,40 @@ func (db *MongoAnalyticsDatabase) calculateRatingGrowth(ctx context.Context, cur
 		previousCount, err := db.activityCollection.CountDocuments(ctx, filter)
 		if err != nil {
 			log.Printf("Error counting previous ratings: %v", err)
+			return current, 0
+		}
+		previous = float64(previousCount)
+	}
+	
+	return current, previous
+}
+
+// calculateSearchGrowth calculates search growth between periods
+func (db *MongoAnalyticsDatabase) calculateSearchGrowth(ctx context.Context, currentStart, currentEnd, previousStart, previousEnd time.Time) (current, previous float64) {
+	// Count searches in current period
+	filter := bson.M{
+		"timestamp": bson.M{
+			"$gte": currentStart,
+			"$lt":  currentEnd,
+		},
+	}
+	
+	currentCount, err := db.searchCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		log.Printf("Error counting current searches: %v", err)
+		return 0, 0
+	}
+	current = float64(currentCount)
+	
+	// Count searches in previous period if specified
+	if !previousStart.IsZero() && !previousEnd.IsZero() {
+		filter["timestamp"] = bson.M{
+			"$gte": previousStart,
+			"$lt":  previousEnd,
+		}
+		previousCount, err := db.searchCollection.CountDocuments(ctx, filter)
+		if err != nil {
+			log.Printf("Error counting previous searches: %v", err)
 			return current, 0
 		}
 		previous = float64(previousCount)
