@@ -6,10 +6,12 @@ This guide explains how to integrate the new stats features from the MCP Registr
 
 The stats extension adds the following capabilities to the registry:
 - Installation tracking
-- Server ratings
+- Server ratings with comments (feedback system)
 - Analytics integration
 - Community server claiming with stats transfer
 - Leaderboards and trending servers
+- Recent server discovery tracking
+- User feedback management
 
 All new endpoints are under the `/vp` (v-plugged) prefix to maintain compatibility with the upstream registry.
 
@@ -129,34 +131,147 @@ async function installServer(server: ExtendedServer) {
 }
 ```
 
-## Rating System
+## Rating and Feedback System
 
-Implement a rating widget:
+The enhanced rating system now supports comments and user feedback tracking:
+
+### Submit Rating with Comment
+
+```typescript
+interface RatingRequest {
+  rating: number;        // 1-5
+  comment?: string;      // Optional, max 1000 chars
+  user_id: string;       // Track user ratings
+  source?: 'REGISTRY' | 'COMMUNITY';
+}
+
+interface FeedbackResponse {
+  success: boolean;
+  message: string;
+  feedback: ServerFeedback;
+  stats: ServerStats;
+}
+
+async function submitRating(serverId: string, rating: number, comment?: string) {
+  const response = await fetch(
+    `${REGISTRY_VP_URL}/servers/${serverId}/rate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rating,
+        comment,
+        user_id: getCurrentUserId(),
+        source: 'REGISTRY'
+      })
+    }
+  );
+  
+  if (!response.ok) {
+    throw new Error(`Rating failed: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+```
+
+### Display Server Feedback
+
+```typescript
+interface ServerFeedback {
+  id: string;
+  server_id: string;
+  user_id: string;
+  rating: number;
+  comment?: string;
+  created_at: string;
+  updated_at: string;
+  is_public: boolean;
+}
+
+interface FeedbackListResponse {
+  feedback: ServerFeedback[];
+  total_count: number;
+  has_more: boolean;
+}
+
+// Get all feedback for a server
+async function getServerFeedback(
+  serverId: string,
+  options?: {
+    limit?: number;
+    offset?: number;
+    sort?: 'newest' | 'oldest' | 'rating_high' | 'rating_low';
+    source?: 'REGISTRY' | 'COMMUNITY';
+  }
+): Promise<FeedbackListResponse> {
+  const params = new URLSearchParams({
+    limit: String(options?.limit || 20),
+    offset: String(options?.offset || 0),
+    sort: options?.sort || 'newest',
+    source: options?.source || 'REGISTRY'
+  });
+  
+  const response = await fetch(
+    `${REGISTRY_VP_URL}/servers/${serverId}/feedback?${params}`
+  );
+  return response.json();
+}
+```
+
+### Check User's Rating
+
+```typescript
+interface UserFeedbackResponse {
+  has_rated: boolean;
+  feedback?: ServerFeedback;
+}
+
+// Check if user has already rated a server
+async function getUserFeedback(
+  serverId: string,
+  userId: string,
+  source: string = 'REGISTRY'
+): Promise<UserFeedbackResponse> {
+  const response = await fetch(
+    `${REGISTRY_VP_URL}/servers/${serverId}/rating/${userId}?source=${source}`
+  );
+  return response.json();
+}
+```
+
+### Enhanced Rating Widget
 
 ```tsx
 function RatingWidget({ server }: { server: ExtendedServer }) {
   const [userRating, setUserRating] = useState<number | null>(null);
+  const [comment, setComment] = useState('');
+  const [showCommentBox, setShowCommentBox] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [userFeedback, setUserFeedback] = useState<ServerFeedback | null>(null);
+
+  // Check if user already rated
+  useEffect(() => {
+    getUserFeedback(server.id, getCurrentUserId()).then(response => {
+      if (response.has_rated && response.feedback) {
+        setUserRating(response.feedback.rating);
+        setUserFeedback(response.feedback);
+      }
+    });
+  }, [server.id]);
 
   async function submitRating(rating: number) {
     setIsSubmitting(true);
     try {
-      const response = await fetch(
-        `${REGISTRY_VP_URL}/servers/${server.id}/rate`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rating })
-        }
-      );
+      const result = await submitRating(server.id, rating, comment);
+      setUserRating(rating);
+      setUserFeedback(result.feedback);
+      setShowCommentBox(false);
+      setComment('');
       
-      if (response.ok) {
-        const result = await response.json();
-        setUserRating(rating);
-        // Optionally update local server stats
-        if (result.stats) {
-          updateServerStats(server.id, result.stats);
-        }
+      // Update local server stats
+      if (result.stats) {
+        updateServerStats(server.id, result.stats);
       }
     } catch (error) {
       console.error('Failed to submit rating:', error);
@@ -425,21 +540,235 @@ async function getServerWithStats(serverId: string): Promise<ExtendedServer> {
 }
 ```
 
+## Recent Servers Discovery
+
+Track and display recently added servers:
+
+```typescript
+interface RecentServerResponse {
+  servers: Array<{
+    ...ExtendedServer;
+    first_seen: string;
+    discovered_via: 'stats' | 'import';
+  }>;
+  total_count: number;
+  filter: {
+    source: string;
+    limit: number;
+    days: string;
+  };
+}
+
+// Get recently discovered servers
+async function getRecentServers(options?: {
+  limit?: number;
+  days?: number;  // Filter by last N days
+  source?: 'REGISTRY' | 'COMMUNITY' | 'ALL';
+}): Promise<RecentServerResponse> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.days) params.set('days', String(options.days));
+  if (options?.source) params.set('source', options.source);
+  
+  const response = await fetch(
+    `${REGISTRY_VP_URL}/servers/recent?${params}`
+  );
+  return response.json();
+}
+
+// Display recent servers
+function RecentServersWidget() {
+  const [servers, setServers] = useState<RecentServerResponse | null>(null);
+  const [days, setDays] = useState<number | undefined>();
+
+  useEffect(() => {
+    getRecentServers({ limit: 10, days }).then(setServers);
+  }, [days]);
+
+  return (
+    <div className="recent-servers">
+      <h3>Recently Added Servers</h3>
+      
+      <div className="filter-buttons">
+        <button onClick={() => setDays(undefined)} 
+                className={!days ? 'active' : ''}>
+          All Time
+        </button>
+        <button onClick={() => setDays(7)}
+                className={days === 7 ? 'active' : ''}>
+          Last Week
+        </button>
+        <button onClick={() => setDays(30)}
+                className={days === 30 ? 'active' : ''}>
+          Last Month
+        </button>
+      </div>
+
+      {servers?.servers.map(server => (
+        <div key={server.id} className="recent-server-item">
+          <ServerCard server={server} />
+          <div className="discovery-info">
+            <TimeAgo date={server.first_seen} />
+            {server.discovered_via === 'stats' && (
+              <span className="badge">Community Discovered</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+## Feedback Management
+
+### Update/Delete User Feedback
+
+```typescript
+// Update existing feedback
+async function updateFeedback(
+  serverId: string,
+  feedbackId: string,
+  updates: {
+    rating: number;
+    comment?: string;
+    user_id: string;
+  }
+): Promise<void> {
+  const response = await fetch(
+    `${REGISTRY_VP_URL}/servers/${serverId}/feedback/${feedbackId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    }
+  );
+  
+  if (!response.ok) {
+    throw new Error(`Update failed: ${response.statusText}`);
+  }
+}
+
+// Delete feedback
+async function deleteFeedback(
+  serverId: string,
+  feedbackId: string,
+  userId: string
+): Promise<void> {
+  const response = await fetch(
+    `${REGISTRY_VP_URL}/servers/${serverId}/feedback/${feedbackId}?user_id=${userId}`,
+    { method: 'DELETE' }
+  );
+  
+  if (!response.ok) {
+    throw new Error(`Delete failed: ${response.statusText}`);
+  }
+}
+```
+
+### Display Feedback List
+
+```tsx
+function FeedbackList({ serverId }: { serverId: string }) {
+  const [feedback, setFeedback] = useState<FeedbackListResponse | null>(null);
+  const [sort, setSort] = useState<'newest' | 'rating_high'>('newest');
+  const [page, setPage] = useState(0);
+  const limit = 10;
+
+  useEffect(() => {
+    getServerFeedback(serverId, {
+      limit,
+      offset: page * limit,
+      sort
+    }).then(setFeedback);
+  }, [serverId, sort, page]);
+
+  return (
+    <div className="feedback-list">
+      <div className="feedback-header">
+        <h4>User Reviews ({feedback?.total_count || 0})</h4>
+        <select value={sort} onChange={(e) => setSort(e.target.value as any)}>
+          <option value="newest">Newest First</option>
+          <option value="oldest">Oldest First</option>
+          <option value="rating_high">Highest Rated</option>
+          <option value="rating_low">Lowest Rated</option>
+        </select>
+      </div>
+
+      {feedback?.feedback.map(item => (
+        <div key={item.id} className="feedback-item">
+          <div className="feedback-rating">
+            <StarRating value={item.rating} readonly />
+            <TimeAgo date={item.created_at} />
+          </div>
+          {item.comment && (
+            <p className="feedback-comment">{item.comment}</p>
+          )}
+          {item.user_id === getCurrentUserId() && (
+            <div className="feedback-actions">
+              <button onClick={() => handleEdit(item)}>Edit</button>
+              <button onClick={() => handleDelete(item)}>Delete</button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {feedback?.has_more && (
+        <button onClick={() => setPage(p => p + 1)}>Load More</button>
+      )}
+    </div>
+  );
+}
+```
+
 ## Testing
 
 Test the integration thoroughly:
 
 1. **Stats Display**: Verify stats show correctly for all servers
 2. **Installation Tracking**: Confirm installs increment the counter
-3. **Ratings**: Test rating submission and display updates
-4. **Leaderboards**: Check all leaderboard types load correctly
-5. **Performance**: Ensure caching works and pages load quickly
-6. **Error Cases**: Test with network failures, invalid data, etc.
-7. **Claiming**: Test the full claim flow with stats transfer
+3. **Ratings & Feedback**: 
+   - Test rating submission with comments
+   - Verify duplicate rating prevention
+   - Check feedback display and pagination
+   - Test update/delete operations
+4. **Recent Servers**: 
+   - Verify new servers appear in recent list
+   - Test day filtering
+   - Check first_seen timestamps
+5. **Leaderboards**: Check all leaderboard types load correctly
+6. **Performance**: Ensure caching works and pages load quickly
+7. **Error Cases**: Test with network failures, invalid data, etc.
+8. **Claiming**: Test the full claim flow with stats transfer
+
+## New Endpoints Summary
+
+### Feedback Endpoints
+- `POST /vp/servers/{id}/rate` - Submit rating with optional comment
+- `GET /vp/servers/{id}/feedback` - Get all feedback for a server
+- `GET /vp/servers/{id}/rating/{user_id}` - Check if user has rated
+- `PUT /vp/servers/{id}/feedback/{feedback_id}` - Update feedback
+- `DELETE /vp/servers/{id}/feedback/{feedback_id}` - Delete feedback
+
+### Recent Servers Endpoints
+- `GET /vp/servers/recent` - Get recently discovered servers
+- `GET /vp/admin/timeline` - Server addition timeline (coming soon)
+
+### Existing Stats Endpoints
+- `GET /vp/servers` - Servers with stats
+- `GET /vp/servers/{id}` - Single server with stats
+- `POST /vp/servers/{id}/install` - Track installation
+- `GET /vp/servers/{id}/stats` - Detailed server stats
+- `GET /vp/stats/global` - Global registry stats
+- `GET /vp/stats/leaderboard` - Top servers by various metrics
+- `GET /vp/stats/trending` - Trending servers
+- `POST /vp/servers/{id}/claim` - Claim community server
 
 ## Support
 
 For questions or issues with the stats integration:
 - Check the registry logs for errors
 - Monitor the browser console for API failures
+- Use the `/vp/servers/recent` endpoint to verify new servers are being tracked
+- Check feedback endpoints for proper user tracking
 - Contact the registry team with specific error messages

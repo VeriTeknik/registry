@@ -114,7 +114,8 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 		case r.Method == http.MethodPost && isInstallPath(path):
 			vpHandlers.TrackInstallHandler(w, r)
 		case r.Method == http.MethodPost && isRatePath(path):
-			vpHandlers.SubmitRatingHandler(w, r)
+			// Use feedback handler which supports comments
+			vpHandlers.SubmitFeedbackHandler(w, r)
 		case r.Method == http.MethodGet && isStatsPath(path):
 			vpHandlers.GetStatsHandler(w, r)
 		case r.Method == http.MethodPost && isClaimPath(path):
@@ -132,6 +133,10 @@ func SetupVPRoutes(mux *http.ServeMux, config Config) error {
 	mux.HandleFunc("/vp/stats/global", vpHandlers.GetGlobalStatsHandler)
 	mux.HandleFunc("/vp/stats/leaderboard", vpHandlers.GetLeaderboardHandler)
 	mux.HandleFunc("/vp/stats/trending", vpHandlers.GetTrendingHandler)
+	
+	// Recent servers endpoints
+	mux.HandleFunc("/vp/servers/recent", vpHandlers.GetRecentServersHandler)
+	mux.HandleFunc("/vp/admin/timeline", vpHandlers.GetServerTimelineHandler)
 	
 	// Register feedback endpoints separately to ensure they work
 	// This is a temporary workaround for the routing issue

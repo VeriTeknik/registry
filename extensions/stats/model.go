@@ -17,6 +17,7 @@ type ServerStats struct {
 	InstallationCount int       `json:"installation_count" bson:"installation_count"`
 	Rating            float64   `json:"rating" bson:"rating"`
 	RatingCount       int       `json:"rating_count" bson:"rating_count"`
+	FirstSeen         time.Time `json:"first_seen" bson:"first_seen"`
 	LastUpdated       time.Time `json:"last_updated" bson:"last_updated"`
 
 	// Analytics-derived metrics (synced from analytics)

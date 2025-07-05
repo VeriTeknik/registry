@@ -38,9 +38,13 @@ func (h *VPHandlers) SubmitFeedbackHandler(w http.ResponseWriter, r *http.Reques
 	// Parse rating request
 	var ratingReq stats.RatingRequest
 	if err := json.NewDecoder(r.Body).Decode(&ratingReq); err != nil {
+		fmt.Printf("Error decoding rating request: %v\n", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	
+	// Debug log
+	fmt.Printf("Received rating request: %+v\n", ratingReq)
 
 	// Validate rating
 	if ratingReq.Rating < 1 || ratingReq.Rating > 5 {

@@ -33,6 +33,7 @@ type Database interface {
 	GetTopByInstalls(ctx context.Context, limit int, source string) ([]*ServerStats, error)
 	GetTopByRating(ctx context.Context, limit int, source string) ([]*ServerStats, error)
 	GetTrending(ctx context.Context, limit int, source string) ([]*ServerStats, error)
+	GetRecentServers(ctx context.Context, limit int, source string) ([]*ServerStats, error)
 	
 	// Global stats with source support
 	GetGlobalStats(ctx context.Context, source string) (*GlobalStats, error)
@@ -150,13 +151,15 @@ func (db *MongoDatabase) GetStats(ctx context.Context, serverID string, source s
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// Return empty stats if none exist
+			now := time.Now()
 			return &ServerStats{
 				ServerID:          sanitizedServerID,
 				Source:            validatedSource,
 				InstallationCount: 0,
 				Rating:            0,
 				RatingCount:       0,
-				LastUpdated:       time.Now(),
+				FirstSeen:         now,
+				LastUpdated:       now,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get stats: %w", err)
@@ -224,13 +227,15 @@ func (db *MongoDatabase) GetBatchStats(ctx context.Context, serverIDs []string, 
 	// Fill in missing stats with empty values
 	for _, serverID := range serverIDs {
 		if _, exists := result[serverID]; !exists {
+			now := time.Now()
 			result[serverID] = &ServerStats{
 				ServerID:          serverID,
 				Source:            source,
 				InstallationCount: 0,
 				Rating:            0,
 				RatingCount:       0,
-				LastUpdated:       time.Now(),
+				FirstSeen:         now,
+				LastUpdated:       now,
 			}
 		}
 	}
@@ -341,11 +346,15 @@ func (db *MongoDatabase) IncrementInstallCount(ctx context.Context, serverID str
 		"server_id": sanitizedServerID,
 		"source":    validatedSource,
 	}
+	now := time.Now()
 	update := bson.M{
 		"$inc": bson.M{"installation_count": 1},
 		"$set": bson.M{
-			"last_updated": time.Now(),
+			"last_updated": now,
 			"source":       validatedSource,
+		},
+		"$setOnInsert": bson.M{
+			"first_seen": now,
 		},
 	}
 	opts := options.Update().SetUpsert(true)
@@ -397,12 +406,16 @@ func (db *MongoDatabase) UpdateRating(ctx context.Context, serverID string, sour
 	newRatingCount := current.RatingCount + 1
 	newAvgRating := (totalRating + newRating) / float64(newRatingCount)
 
+	now := time.Now()
 	update := bson.M{
 		"$set": bson.M{
 			"rating":       newAvgRating,
 			"rating_count": newRatingCount,
-			"last_updated": time.Now(),
+			"last_updated": now,
 			"source":       source,
+		},
+		"$setOnInsert": bson.M{
+			"first_seen": now,
 		},
 	}
 	opts := options.Update().SetUpsert(true)
@@ -517,6 +530,47 @@ func (db *MongoDatabase) GetTrending(ctx context.Context, limit int, source stri
 	cursor, err := db.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trending: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var results []*ServerStats
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, fmt.Errorf("failed to decode results: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetRecentServers returns servers ordered by first_seen date (most recent first)
+func (db *MongoDatabase) GetRecentServers(ctx context.Context, limit int, source string) ([]*ServerStats, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	// Validate limit
+	validatedLimit, err := validation.ValidateLimit(limit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid limit: %w", err)
+	}
+
+	// Create base filter
+	filter := bson.M{}
+	
+	// Validate and add source filter if provided
+	if source != "" && source != "ALL" {
+		validatedSource, err := validation.ValidateSource(source)
+		if err != nil {
+			return nil, fmt.Errorf("invalid source parameter: %w", err)
+		}
+		filter["source"] = validatedSource
+	}
+	
+	opts := options.Find().
+		SetSort(bson.D{{Key: "first_seen", Value: -1}}).
+		SetLimit(int64(validatedLimit))
+
+	cursor, err := db.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recent servers: %w", err)
 	}
 	defer cursor.Close(ctx)
 
