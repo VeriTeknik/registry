@@ -45,7 +45,8 @@ func NewHTTPAnalyticsClient(baseURL string) *HTTPAnalyticsClient {
 
 // GetServerMetrics fetches metrics for a single server
 func (c *HTTPAnalyticsClient) GetServerMetrics(ctx context.Context, serverID string) (*ServerAnalyticsMetrics, error) {
-	url := fmt.Sprintf("%s/api/v1/servers/%s/metrics", c.baseURL, url.PathEscape(serverID))
+	// Updated to use /stats endpoint instead of /metrics
+	url := fmt.Sprintf("%s/api/v1/servers/%s/stats", c.baseURL, url.PathEscape(serverID))
 	
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -219,17 +220,26 @@ func (s *SyncService) syncAll(ctx context.Context) error {
 
 // getActiveServerIDs retrieves server IDs that have recent activity
 func (s *SyncService) getActiveServerIDs(ctx context.Context) ([]string, error) {
-	// In a real implementation, this would query the main servers collection
-	// or the stats collection for servers with recent activity
-	// For now, return an empty slice as a placeholder
+	// Get all servers with stats from the database
+	serverStats, err := s.statsDB.GetAllStats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get server stats: %w", err)
+	}
 	
-	// Example implementation would be:
-	// cursor, err := s.statsDB.collection.Find(ctx, bson.M{
-	//     "last_updated": bson.M{"$gte": time.Now().Add(-24 * time.Hour)},
-	// })
-	// ... parse results and return server IDs
+	// Extract unique server IDs
+	serverIDMap := make(map[string]bool)
+	for _, stat := range serverStats {
+		serverIDMap[stat.ServerID] = true
+	}
 	
-	return []string{}, nil
+	// Convert to slice
+	serverIDs := make([]string, 0, len(serverIDMap))
+	for id := range serverIDMap {
+		serverIDs = append(serverIDs, id)
+	}
+	
+	log.Printf("Found %d servers to sync", len(serverIDs))
+	return serverIDs, nil
 }
 
 // syncAnalyticsData processes and stores analytics metrics

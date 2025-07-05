@@ -38,6 +38,9 @@ type Database interface {
 	// Global stats with source support
 	GetGlobalStats(ctx context.Context, source string) (*GlobalStats, error)
 	
+	// Get all stats for sync purposes
+	GetAllStats(ctx context.Context) ([]*ServerStats, error)
+	
 	// Bulk operations
 	SyncAnalyticsData(ctx context.Context, updates []StatsUpdateRequest) error
 	TransferStats(ctx context.Context, fromServerID, toServerID, fromSource, toSource string) error
@@ -797,6 +800,25 @@ func (db *MongoDatabase) TransferStats(ctx context.Context, fromServerID, toServ
 	}
 
 	return nil
+}
+
+// GetAllStats retrieves all server stats from the database
+func (db *MongoDatabase) GetAllStats(ctx context.Context) ([]*ServerStats, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	cursor, err := db.collection.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all stats: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var results []*ServerStats
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, fmt.Errorf("failed to decode all stats: %w", err)
+	}
+
+	return results, nil
 }
 
 // MigrateExistingStats adds source field to existing stats entries

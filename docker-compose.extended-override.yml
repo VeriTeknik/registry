@@ -19,7 +19,8 @@ services:
       - MCP_REGISTRY_GITHUB_CLIENT_ID=${MCP_REGISTRY_GITHUB_CLIENT_ID}
       - MCP_REGISTRY_GITHUB_CLIENT_SECRET=${MCP_REGISTRY_GITHUB_CLIENT_SECRET}
       - MCP_REGISTRY_CORS_ORIGINS=${MCP_REGISTRY_CORS_ORIGINS}
-      - MCP_REGISTRY_ANALYTICS_URL=${MCP_REGISTRY_ANALYTICS_URL:-http://analytics-api:8081}
+      # Analytics URL - set to actual Elasticsearch analytics service if available
+      # - MCP_REGISTRY_ANALYTICS_URL=${MCP_REGISTRY_ANALYTICS_URL:-https://analytics.plugged.in}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.registry.rule=Host(`registry.plugged.in`)"
@@ -29,4 +30,4 @@ services:
       - "traefik.docker.network=traefik"
     restart: "unless-stopped"
     # Remove port mapping since Traefik handles it
-    ports: []
+    ports: !reset
