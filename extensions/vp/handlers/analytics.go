@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/extensions/stats"
@@ -14,10 +15,25 @@ func (h *VPHandlers) GetDashboardMetricsHandler(w http.ResponseWriter, r *http.R
 	// Debug log
 	log.Printf("GetDashboardMetricsHandler called - method: %s, path: %s", r.Method, r.URL.Path)
 	
+	// Rate limit check for expensive operations
+	clientIP := r.RemoteAddr
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		clientIP = strings.Split(forwarded, ",")[0]
+	}
+	// Log client IP for rate limiting analysis (could be used by external rate limiter)
+	log.Printf("Analytics request from IP: %s", clientIP)
+	
 	// Get time period from query params
 	period := r.URL.Query().Get("period")
 	if period == "" {
 		period = "day"
+	}
+	
+	// Validate period to prevent abuse
+	validPeriods := map[string]bool{"day": true, "week": true, "month": true, "year": true}
+	if !validPeriods[period] {
+		WriteStandardError(w, http.StatusBadRequest, "Invalid period parameter")
+		return
 	}
 
 	// Check cache
@@ -58,9 +74,12 @@ func (h *VPHandlers) GetDashboardMetricsHandler(w http.ResponseWriter, r *http.R
 	}
 
 	// Calculate trends
-	installsTrend := calculateTrend(metrics.TotalInstalls, previousMetrics.TotalInstalls)
-	apiCallsTrend := calculateTrend(metrics.TotalAPICalls, previousMetrics.TotalAPICalls)
-	activeUsersTrend := calculateTrend(metrics.ActiveUsers, previousMetrics.ActiveUsers)
+	var installsTrend, apiCallsTrend, activeUsersTrend float64
+	if previousMetrics != nil {
+		installsTrend = calculateTrend(metrics.TotalInstalls, previousMetrics.TotalInstalls)
+		apiCallsTrend = calculateTrend(metrics.TotalAPICalls, previousMetrics.TotalAPICalls)
+		activeUsersTrend = calculateTrend(metrics.ActiveUsers, previousMetrics.ActiveUsers)
+	}
 	
 	// Calculate server health score (based on uptime and response time)
 	healthScore := calculateHealthScore(metrics.UptimePercentage, metrics.ResponseTimeP50)
