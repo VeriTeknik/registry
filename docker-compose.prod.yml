@@ -1,0 +1,21 @@
+networks:
+  traefik:
+    external: true
+  pluggedin-main:
+    external: true
+
+services:
+  registry:
+    build: .
+    container_name: registry
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - MCP_REGISTRY_SERVER_ADDRESS=:8080
+    networks:
+      - pluggedin-main
+      - traefik
+    labels:
+      # Disable Traefik routing - now handled by proxy
+      - "traefik.enable=false"
