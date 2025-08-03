@@ -5,3 +5,6 @@ build/*
 **/bin
 cmd/registry/registry
 publisher
+validate-examples
+validate-schemas
+.idea/

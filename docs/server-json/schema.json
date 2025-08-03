@@ -60,6 +60,12 @@
           "description": "Human-readable description of the server's functionality",
           "example": "Node.js server implementing Model Context Protocol (MCP) for filesystem operations."
         },
+        "status": {
+          "type": "string",
+          "enum": ["active", "deprecated"],
+          "default": "active",
+          "description": "Server lifecycle status. 'deprecated' indicates the server is no longer recommended for new usage."
+        },
         "repository": {
           "$ref": "#/$defs/Repository"
         },
@@ -196,8 +202,7 @@
         {
           "type": "object",
           "required": [
-            "type",
-            "value_hint"
+            "type"
           ],
           "properties": {
             "type": {
@@ -217,7 +222,19 @@
               "description": "Whether the argument can be repeated multiple times in the command line.",
               "default": false
             }
-          }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "value_hint"
+              ]
+            },
+            {
+              "required": [
+                "value"
+              ]
+            }
+          ]
         }
       ]
     },
