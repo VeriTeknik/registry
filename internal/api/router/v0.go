@@ -2,26 +2,35 @@
 package router
 
 import (
-	"net/http"
+	"github.com/danielgtaylor/huma/v2"
 
 	v0 "github.com/modelcontextprotocol/registry/internal/api/handlers/v0"
-	"github.com/modelcontextprotocol/registry/internal/auth"
+	v0auth "github.com/modelcontextprotocol/registry/internal/api/handlers/v0/auth"
 	"github.com/modelcontextprotocol/registry/internal/config"
 	"github.com/modelcontextprotocol/registry/internal/service"
+	"github.com/modelcontextprotocol/registry/internal/telemetry"
 )
 
-// RegisterV0Routes registers all v0 API routes to the provided router
 func RegisterV0Routes(
-	mux *http.ServeMux, cfg *config.Config, registry service.RegistryService, authService auth.Service,
+	api huma.API, cfg *config.Config, registry service.RegistryService, metrics *telemetry.Metrics, versionInfo *v0.VersionBody,
 ) {
-	// Register v0 endpoints
-	mux.HandleFunc("/v0/health", v0.HealthHandler(cfg))
-	mux.HandleFunc("/v0/servers", v0.ServersHandler(registry))
-	mux.HandleFunc("/v0/servers/{id}", v0.ServersDetailHandler(registry))
-	mux.HandleFunc("/v0/ping", v0.PingHandler(cfg))
-	mux.HandleFunc("/v0/publish", v0.PublishHandler(registry, authService))
+	v0.RegisterHealthEndpoint(api, "/v0", cfg, metrics)
+	v0.RegisterPingEndpoint(api, "/v0")
+	v0.RegisterVersionEndpoint(api, "/v0", versionInfo)
+	v0.RegisterServersEndpoints(api, "/v0", registry)
+	v0.RegisterEditEndpoints(api, "/v0", registry, cfg)
+	v0auth.RegisterAuthEndpoints(api, "/v0", cfg)
+	v0.RegisterPublishEndpoint(api, "/v0", registry, cfg)
+}
 
-	// Register Swagger UI routes
-	mux.HandleFunc("/v0/swagger/", v0.SwaggerHandler())
-	mux.HandleFunc("/v0/swagger/doc.json", v0.SwaggerJSONHandler())
+func RegisterV0_1Routes(
+	api huma.API, cfg *config.Config, registry service.RegistryService, metrics *telemetry.Metrics, versionInfo *v0.VersionBody,
+) {
+	v0.RegisterHealthEndpoint(api, "/v0.1", cfg, metrics)
+	v0.RegisterPingEndpoint(api, "/v0.1")
+	v0.RegisterVersionEndpoint(api, "/v0.1", versionInfo)
+	v0.RegisterServersEndpoints(api, "/v0.1", registry)
+	v0.RegisterEditEndpoints(api, "/v0.1", registry, cfg)
+	v0auth.RegisterAuthEndpoints(api, "/v0.1", cfg)
+	v0.RegisterPublishEndpoint(api, "/v0.1", registry, cfg)
 }

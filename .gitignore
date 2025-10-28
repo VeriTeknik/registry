@@ -1,5 +1,6 @@
 build/
 bin/
+tmp/
 
 .db
 .env
@@ -10,5 +11,5 @@ validate-schemas
 .idea/
 coverage.out
 coverage.html
-
+deploy/infra/infra
 registry

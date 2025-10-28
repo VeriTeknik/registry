@@ -27,7 +27,6 @@ linters:
     - gosec
     - grouper
     - importas
-    - ireturn
     - makezero
     - misspell
     - nakedret
@@ -72,6 +71,8 @@ linters:
       - builtin$
       - examples$
 formatters:
+  enable:
+    - gofmt
   exclusions:
     generated: lax
     paths:

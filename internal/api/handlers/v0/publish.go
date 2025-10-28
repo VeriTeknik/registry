@@ -1,133 +1,88 @@
-// Package v0 contains API handlers for version 0 of the API
 package v0
 
 import (
-	"encoding/json"
-	"errors"
-	"io"
+	"context"
 	"net/http"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelcontextprotocol/registry/internal/auth"
-	"github.com/modelcontextprotocol/registry/internal/database"
-	"github.com/modelcontextprotocol/registry/internal/model"
+	"github.com/modelcontextprotocol/registry/internal/config"
 	"github.com/modelcontextprotocol/registry/internal/service"
-	"golang.org/x/net/html"
+	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 )
 
-// PublishHandler handles requests to publish new server details to the registry
-func PublishHandler(registry service.RegistryService, authService auth.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Only allow POST method
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+// PublishServerInput represents the input for publishing a server
+type PublishServerInput struct {
+	Authorization string           `header:"Authorization" doc:"Registry JWT token (obtained from /v0/auth/token/github)" required:"true"`
+	Body          apiv0.ServerJSON `body:""`
+}
 
-		// Read the request body
-		body, err := io.ReadAll(r.Body)
+// RegisterPublishEndpoint registers the publish endpoint with a custom path prefix
+func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, cfg *config.Config) {
+	// Create JWT manager for token validation
+	jwtManager := auth.NewJWTManager(cfg)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "publish-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodPost,
+		Path:        pathPrefix + "/publish",
+		Summary:     "Publish MCP server",
+		Description: "Publish a new MCP server to the registry or update an existing one",
+		Tags:        []string{"publish"},
+		Security: []map[string][]string{
+			{"bearer": {}},
+		},
+	}, func(ctx context.Context, input *PublishServerInput) (*Response[apiv0.ServerResponse], error) {
+		// Extract bearer token
+		const bearerPrefix = "Bearer "
+		authHeader := input.Authorization
+		if len(authHeader) < len(bearerPrefix) || !strings.EqualFold(authHeader[:len(bearerPrefix)], bearerPrefix) {
+			return nil, huma.Error401Unauthorized("Invalid Authorization header format. Expected 'Bearer <token>'")
+		}
+		token := authHeader[len(bearerPrefix):]
+
+		// Validate Registry JWT token
+		claims, err := jwtManager.ValidateToken(ctx, token)
 		if err != nil {
-			http.Error(w, "Error reading request body", http.StatusBadRequest)
-			return
+			return nil, huma.Error401Unauthorized("Invalid or expired Registry JWT token", err)
 		}
-		defer r.Body.Close()
 
-		// Parse request body into PublishRequest struct
-		var publishReq model.PublishRequest
-		err = json.Unmarshal(body, &publishReq)
+		// Verify that the token has permission to publish the server
+		if !jwtManager.HasPermission(input.Body.Name, auth.PermissionActionPublish, claims.Permissions) {
+			return nil, huma.Error403Forbidden(buildPermissionErrorMessage(input.Body.Name, claims.Permissions))
+		}
+
+		// Publish the server with extensions
+		publishedServer, err := registry.CreateServer(ctx, &input.Body)
 		if err != nil {
-			http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
-			return
+			return nil, huma.Error400BadRequest("Failed to publish server", err)
 		}
 
-		// Get server details from the request
-		var serverDetail model.ServerDetail
+		// Return the published server response with metadata
+		return &Response[apiv0.ServerResponse]{
+			Body: *publishedServer,
+		}, nil
+	})
+}
 
-		err = json.Unmarshal(body, &serverDetail)
-		if err != nil {
-			http.Error(w, "Invalid server detail payload: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		// Validate required fields
-		if serverDetail.Name == "" {
-			http.Error(w, "Name is required", http.StatusBadRequest)
-			return
-		}
-
-		// Version is required
-		if serverDetail.VersionDetail.Version == "" {
-			http.Error(w, "Version is required", http.StatusBadRequest)
-			return
-		}
-
-		// Get auth token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization header is required", http.StatusUnauthorized)
-			return
-		}
-
-		// Handle bearer token format (e.g., "Bearer xyz123")
-		token := authHeader
-		if len(authHeader) > 7 && strings.ToUpper(authHeader[:7]) == "BEARER " {
-			token = authHeader[7:]
-		}
-
-		// Determine authentication method based on server name prefix
-		var authMethod model.AuthMethod
-		switch {
-		case strings.HasPrefix(serverDetail.Name, "io.github"):
-			authMethod = model.AuthMethodGitHub
-		// Additional cases can be added here for other prefixes
-		default:
-			// Keep the default auth method as AuthMethodNone
-			authMethod = model.AuthMethodNone
-		}
-
-		serverName := html.EscapeString(serverDetail.Name)
-
-		// Setup authentication info
-		a := model.Authentication{
-			Method:  authMethod,
-			Token:   token,
-			RepoRef: serverName,
-		}
-
-		valid, err := authService.ValidateAuth(r.Context(), a)
-		if err != nil {
-			if errors.Is(err, auth.ErrAuthRequired) {
-				http.Error(w, "Authentication is required for publishing", http.StatusUnauthorized)
-				return
-			}
-			http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-
-		if !valid {
-			http.Error(w, "Invalid authentication credentials", http.StatusUnauthorized)
-			return
-		}
-
-		// Call the publish method on the registry service
-		err = registry.Publish(&serverDetail)
-		if err != nil {
-			// Check for specific error types and return appropriate HTTP status codes
-			if errors.Is(err, database.ErrInvalidVersion) || errors.Is(err, database.ErrAlreadyExists) {
-				http.Error(w, "Failed to publish server details: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			http.Error(w, "Failed to publish server details: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(map[string]string{
-			"message": "Server publication successful",
-			"id":      serverDetail.ID,
-		}); err != nil {
-			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-			return
+// buildPermissionErrorMessage creates a detailed error message showing what permissions
+// the user has and what they're trying to publish
+func buildPermissionErrorMessage(attemptedResource string, permissions []auth.Permission) string {
+	var permissionStrs []string
+	for _, perm := range permissions {
+		if perm.Action == auth.PermissionActionPublish {
+			permissionStrs = append(permissionStrs, perm.ResourcePattern)
 		}
 	}
+
+	errorMsg := "You do not have permission to publish this server"
+	if len(permissionStrs) > 0 {
+		errorMsg += ". You have permission to publish: " + strings.Join(permissionStrs, ", ")
+	} else {
+		errorMsg += ". You do not have any publish permissions"
+	}
+	errorMsg += ". Attempting to publish: " + attemptedResource
+
+	return errorMsg
 }

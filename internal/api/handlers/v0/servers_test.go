@@ -3,389 +3,518 @@ package v0_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	v0 "github.com/modelcontextprotocol/registry/internal/api/handlers/v0"
-	"github.com/modelcontextprotocol/registry/internal/model"
+	"github.com/modelcontextprotocol/registry/internal/config"
+	"github.com/modelcontextprotocol/registry/internal/database"
+	"github.com/modelcontextprotocol/registry/internal/service"
+	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
+	"github.com/modelcontextprotocol/registry/pkg/model"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
-func TestServersHandler(t *testing.T) {
-	testCases := []struct {
-		name            string
-		method          string
-		queryParams     string
-		setupMocks      func(*MockRegistryService)
-		expectedStatus  int
-		expectedServers []model.Server
-		expectedMeta    *v0.Metadata
-		expectedError   string
+func TestListServersEndpoint(t *testing.T) {
+	ctx := context.Background()
+	registryService := service.NewRegistryService(database.NewTestDB(t), config.NewConfig())
+
+	// Setup test data
+	_, err := registryService.CreateServer(ctx, &apiv0.ServerJSON{
+		Schema:      model.CurrentSchemaURL,
+		Name:        "com.example/server-alpha",
+		Description: "Alpha test server",
+		Version:     "1.0.0",
+	})
+	require.NoError(t, err)
+
+	_, err = registryService.CreateServer(ctx, &apiv0.ServerJSON{
+		Schema:      model.CurrentSchemaURL,
+		Name:        "com.example/server-beta",
+		Description: "Beta test server",
+		Version:     "2.0.0",
+	})
+	require.NoError(t, err)
+
+	// Create API
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Test API", "1.0.0"))
+	v0.RegisterServersEndpoints(api, "/v0", registryService)
+
+	tests := []struct {
+		name           string
+		queryParams    string
+		expectedStatus int
+		expectedCount  int
+		expectedError  string
 	}{
 		{
-			name:   "successful list with default parameters",
-			method: http.MethodGet,
-			setupMocks: func(registry *MockRegistryService) {
-				servers := []model.Server{
-					{
-						ID:          "550e8400-e29b-41d4-a716-446655440001",
-						Name:        "test-server-1",
-						Description: "First test server",
-						Repository: model.Repository{
-							URL:    "https://github.com/example/test-server-1",
-							Source: "github",
-							ID:     "example/test-server-1",
-						},
-						VersionDetail: model.VersionDetail{
-							Version:     "1.0.0",
-							ReleaseDate: "2025-05-25T00:00:00Z",
-							IsLatest:    true,
-						},
-					},
-					{
-						ID:          "550e8400-e29b-41d4-a716-446655440002",
-						Name:        "test-server-2",
-						Description: "Second test server",
-						Repository: model.Repository{
-							URL:    "https://github.com/example/test-server-2",
-							Source: "github",
-							ID:     "example/test-server-2",
-						},
-						VersionDetail: model.VersionDetail{
-							Version:     "2.0.0",
-							ReleaseDate: "2025-05-26T00:00:00Z",
-							IsLatest:    true,
-						},
-					},
-				}
-				registry.Mock.On("List", "", 30).Return(servers, "", nil)
-			},
+			name:           "list all servers",
+			queryParams:    "",
 			expectedStatus: http.StatusOK,
-			expectedServers: []model.Server{
-				{
-					ID:          "550e8400-e29b-41d4-a716-446655440001",
-					Name:        "test-server-1",
-					Description: "First test server",
-					Repository: model.Repository{
-						URL:    "https://github.com/example/test-server-1",
-						Source: "github",
-						ID:     "example/test-server-1",
-					},
-					VersionDetail: model.VersionDetail{
-						Version:     "1.0.0",
-						ReleaseDate: "2025-05-25T00:00:00Z",
-						IsLatest:    true,
-					},
-				},
-				{
-					ID:          "550e8400-e29b-41d4-a716-446655440002",
-					Name:        "test-server-2",
-					Description: "Second test server",
-					Repository: model.Repository{
-						URL:    "https://github.com/example/test-server-2",
-						Source: "github",
-						ID:     "example/test-server-2",
-					},
-					VersionDetail: model.VersionDetail{
-						Version:     "2.0.0",
-						ReleaseDate: "2025-05-26T00:00:00Z",
-						IsLatest:    true,
-					},
-				},
-			},
+			expectedCount:  2,
 		},
 		{
-			name:        "successful list with cursor and limit",
-			method:      http.MethodGet,
-			queryParams: "?cursor=550e8400-e29b-41d4-a716-446655440000" + "&limit=10",
-			setupMocks: func(registry *MockRegistryService) {
-				servers := []model.Server{
-					{
-						ID:          "550e8400-e29b-41d4-a716-446655440003",
-						Name:        "test-server-3",
-						Description: "Third test server",
-						Repository: model.Repository{
-							URL:    "https://github.com/example/test-server-3",
-							Source: "github",
-							ID:     "example/test-server-3",
-						},
-						VersionDetail: model.VersionDetail{
-							Version:     "1.5.0",
-							ReleaseDate: "2025-05-27T00:00:00Z",
-							IsLatest:    true,
-						},
-					},
-				}
-				nextCursor := uuid.New().String()
-				registry.Mock.On("List", mock.AnythingOfType("string"), 10).Return(servers, nextCursor, nil)
-			},
+			name:           "list with limit",
+			queryParams:    "?limit=1",
 			expectedStatus: http.StatusOK,
-			expectedServers: []model.Server{
-				{
-					ID:          "550e8400-e29b-41d4-a716-446655440003",
-					Name:        "test-server-3",
-					Description: "Third test server",
-					Repository: model.Repository{
-						URL:    "https://github.com/example/test-server-3",
-						Source: "github",
-						ID:     "example/test-server-3",
-					},
-					VersionDetail: model.VersionDetail{
-						Version:     "1.5.0",
-						ReleaseDate: "2025-05-27T00:00:00Z",
-						IsLatest:    true,
-					},
-				},
-			},
-			expectedMeta: &v0.Metadata{
-				NextCursor: "", // This will be dynamically set in the test
-				Count:      1,
-			},
+			expectedCount:  1,
 		},
 		{
-			name:        "successful list with limit capping at 100",
-			method:      http.MethodGet,
-			queryParams: "?limit=150",
-			setupMocks: func(registry *MockRegistryService) {
-				servers := []model.Server{}
-				registry.Mock.On("List", "", 100).Return(servers, "", nil)
-			},
-			expectedStatus:  http.StatusOK,
-			expectedServers: []model.Server{},
+			name:           "search servers",
+			queryParams:    "?search=alpha",
+			expectedStatus: http.StatusOK,
+			expectedCount:  1,
 		},
 		{
-			name:           "invalid cursor parameter",
-			method:         http.MethodGet,
-			queryParams:    "?cursor=invalid-uuid",
-			setupMocks:     func(_ *MockRegistryService) {},
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Invalid cursor parameter",
+			name:           "filter latest only",
+			queryParams:    "?version=latest",
+			expectedStatus: http.StatusOK,
+			expectedCount:  2,
 		},
 		{
-			name:           "invalid limit parameter - non-numeric",
-			method:         http.MethodGet,
+			name:           "invalid limit",
 			queryParams:    "?limit=abc",
-			setupMocks:     func(_ *MockRegistryService) {},
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Invalid limit parameter",
-		},
-		{
-			name:           "invalid limit parameter - zero",
-			method:         http.MethodGet,
-			queryParams:    "?limit=0",
-			setupMocks:     func(_ *MockRegistryService) {},
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Limit must be greater than 0",
-		},
-		{
-			name:           "invalid limit parameter - negative",
-			method:         http.MethodGet,
-			queryParams:    "?limit=-5",
-			setupMocks:     func(_ *MockRegistryService) {},
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Limit must be greater than 0",
-		},
-		{
-			name:   "registry service error",
-			method: http.MethodGet,
-			setupMocks: func(registry *MockRegistryService) {
-				registry.Mock.On("List", "", 30).Return([]model.Server{}, "", errors.New("database connection error"))
-			},
-			expectedStatus: http.StatusInternalServerError,
-			expectedError:  "database connection error",
-		},
-		{
-			name:           "method not allowed",
-			method:         http.MethodPost,
-			setupMocks:     func(_ *MockRegistryService) {},
-			expectedStatus: http.StatusMethodNotAllowed,
-			expectedError:  "Method not allowed",
+			expectedStatus: http.StatusUnprocessableEntity,
+			expectedError:  "validation failed",
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create mock registry service
-			mockRegistry := new(MockRegistryService)
-			tc.setupMocks(mockRegistry)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v0/servers"+tt.queryParams, nil)
+			w := httptest.NewRecorder()
 
-			// Create handler
-			handler := v0.ServersHandler(mockRegistry)
+			mux.ServeHTTP(w, req)
 
-			// Create request
-			url := "/v0/servers" + tc.queryParams
-			req, err := http.NewRequestWithContext(context.Background(), tc.method, url, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			assert.Equal(t, tt.expectedStatus, w.Code)
 
-			// Create response recorder
-			rr := httptest.NewRecorder()
-
-			// Call the handler
-			handler.ServeHTTP(rr, req)
-
-			// Check status code
-			assert.Equal(t, tc.expectedStatus, rr.Code)
-
-			if tc.expectedStatus == http.StatusOK {
-				// Check content type
-				assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
-
-				// Parse response body
-				var resp v0.PaginatedResponse
-				err = json.NewDecoder(rr.Body).Decode(&resp)
+			if tt.expectedStatus == http.StatusOK {
+				var resp apiv0.ServerListResponse
+				err := json.NewDecoder(w.Body).Decode(&resp)
 				assert.NoError(t, err)
+				assert.Len(t, resp.Servers, tt.expectedCount)
+				assert.Equal(t, tt.expectedCount, resp.Metadata.Count)
 
-				// Check the response data
-				assert.Equal(t, tc.expectedServers, resp.Data)
-
-				// Check metadata if expected
-				if tc.expectedMeta != nil {
-					assert.Equal(t, tc.expectedMeta.Count, resp.Metadata.Count)
-					if tc.expectedMeta.NextCursor != "" {
-						assert.NotEmpty(t, resp.Metadata.NextCursor)
-					}
+				// Verify structure
+				for _, server := range resp.Servers {
+					assert.NotEmpty(t, server.Server.Name)
+					assert.NotEmpty(t, server.Server.Description)
+					assert.NotNil(t, server.Meta.Official)
 				}
-			} else if tc.expectedError != "" {
-				// Check error message for non-200 responses
-				assert.Contains(t, rr.Body.String(), tc.expectedError)
+			} else if tt.expectedError != "" {
+				assert.Contains(t, w.Body.String(), tt.expectedError)
 			}
-
-			// Verify mock expectations
-			mockRegistry.AssertExpectations(t)
 		})
 	}
 }
 
-// TestServersHandlerIntegration tests the servers list handler with actual HTTP requests
-func TestServersHandlerIntegration(t *testing.T) {
-	// Create mock registry service
-	mockRegistry := new(MockRegistryService)
+func TestGetLatestServerVersionEndpoint(t *testing.T) {
+	ctx := context.Background()
+	registryService := service.NewRegistryService(database.NewTestDB(t), config.NewConfig())
 
-	servers := []model.Server{
+	// Setup test data
+	_, err := registryService.CreateServer(ctx, &apiv0.ServerJSON{
+		Schema:      model.CurrentSchemaURL,
+		Name:        "com.example/detail-server",
+		Description: "Server for detail testing",
+		Version:     "1.0.0",
+	})
+	require.NoError(t, err)
+
+	// Create API
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Test API", "1.0.0"))
+	v0.RegisterServersEndpoints(api, "/v0", registryService)
+
+	tests := []struct {
+		name           string
+		serverName     string
+		expectedStatus int
+		expectedError  string
+	}{
 		{
-			ID:          "550e8400-e29b-41d4-a716-446655440004",
-			Name:        "integration-test-server",
-			Description: "Integration test server",
-			Repository: model.Repository{
-				URL:    "https://github.com/example/integration-test",
-				Source: "github",
-				ID:     "example/integration-test",
-			},
-			VersionDetail: model.VersionDetail{
-				Version:     "1.0.0",
-				ReleaseDate: "2025-05-27T00:00:00Z",
-				IsLatest:    true,
-			},
+			name:           "get existing server latest version",
+			serverName:     "com.example/detail-server",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "get non-existent server",
+			serverName:     "com.example/non-existent",
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "Server not found",
 		},
 	}
 
-	mockRegistry.Mock.On("List", "", 30).Return(servers, "", nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// URL encode the server name
+			encodedName := url.PathEscape(tt.serverName)
+			req := httptest.NewRequest(http.MethodGet, "/v0/servers/"+encodedName+"/versions/latest", nil)
+			w := httptest.NewRecorder()
 
-	// Create test server
-	server := httptest.NewServer(v0.ServersHandler(mockRegistry))
-	defer server.Close()
+			mux.ServeHTTP(w, req)
 
-	// Send request to the test server
-	ctx := context.Background()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedStatus == http.StatusOK {
+				var resp apiv0.ServerResponse
+				err := json.NewDecoder(w.Body).Decode(&resp)
+				assert.NoError(t, err)
+				assert.Equal(t, tt.serverName, resp.Server.Name)
+				assert.NotNil(t, resp.Meta.Official)
+			} else if tt.expectedError != "" {
+				assert.Contains(t, w.Body.String(), tt.expectedError)
+			}
+		})
 	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("Failed to send request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// Check status code
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// Check content type
-	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
-
-	// Parse response body
-	var paginatedResp v0.PaginatedResponse
-	err = json.NewDecoder(resp.Body).Decode(&paginatedResp)
-	assert.NoError(t, err)
-
-	// Check the response data
-	assert.Equal(t, servers, paginatedResp.Data)
-	assert.Empty(t, paginatedResp.Metadata.NextCursor)
-
-	// Verify mock expectations
-	mockRegistry.AssertExpectations(t)
 }
 
-// TestServersDetailHandlerIntegration tests the servers detail handler with actual HTTP requests
-func TestServersDetailHandlerIntegration(t *testing.T) {
-	serverID := uuid.New().String()
+func TestGetServerVersionEndpoint(t *testing.T) {
+	ctx := context.Background()
+	registryService := service.NewRegistryService(database.NewTestDB(t), config.NewConfig())
 
-	// Create mock registry service
-	mockRegistry := new(MockRegistryService)
+	serverName := "com.example/version-server"
 
-	serverDetail := &model.ServerDetail{
-		Server: model.Server{
-			ID:          serverID,
-			Name:        "integration-test-server-detail",
-			Description: "Integration test server detail",
-			Repository: model.Repository{
-				URL:    "https://github.com/example/integration-test-detail",
-				Source: "github",
-				ID:     "example/integration-test-detail",
+	// Setup test data with multiple versions
+	_, err := registryService.CreateServer(ctx, &apiv0.ServerJSON{
+		Schema:      model.CurrentSchemaURL,
+		Name:        serverName,
+		Description: "Version test server v1",
+		Version:     "1.0.0",
+	})
+	require.NoError(t, err)
+
+	_, err = registryService.CreateServer(ctx, &apiv0.ServerJSON{
+		Schema:      model.CurrentSchemaURL,
+		Name:        serverName,
+		Description: "Version test server v2",
+		Version:     "2.0.0",
+	})
+	require.NoError(t, err)
+
+	// Add version with build metadata for URL encoding test
+	_, err = registryService.CreateServer(ctx, &apiv0.ServerJSON{
+		Schema:      model.CurrentSchemaURL,
+		Name:        serverName,
+		Description: "Version test server with build metadata",
+		Version:     "1.0.0+20130313144700",
+	})
+	require.NoError(t, err)
+
+	// Create API
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Test API", "1.0.0"))
+	v0.RegisterServersEndpoints(api, "/v0", registryService)
+
+	tests := []struct {
+		name           string
+		serverName     string
+		version        string
+		expectedStatus int
+		expectedError  string
+		checkResult    func(*testing.T, *apiv0.ServerResponse)
+	}{
+		{
+			name:           "get existing version",
+			serverName:     serverName,
+			version:        "1.0.0",
+			expectedStatus: http.StatusOK,
+			checkResult: func(t *testing.T, resp *apiv0.ServerResponse) {
+				t.Helper()
+				assert.Equal(t, "1.0.0", resp.Server.Version)
+				assert.Equal(t, "Version test server v1", resp.Server.Description)
+				assert.False(t, resp.Meta.Official.IsLatest)
 			},
-			VersionDetail: model.VersionDetail{
-				Version:     "2.0.0",
-				ReleaseDate: "2025-05-27T12:00:00Z",
-				IsLatest:    true,
+		},
+		{
+			name:           "get latest version",
+			serverName:     serverName,
+			version:        "2.0.0",
+			expectedStatus: http.StatusOK,
+			checkResult: func(t *testing.T, resp *apiv0.ServerResponse) {
+				t.Helper()
+				assert.Equal(t, "2.0.0", resp.Server.Version)
+				assert.True(t, resp.Meta.Official.IsLatest)
+			},
+		},
+		{
+			name:           "get non-existent version",
+			serverName:     serverName,
+			version:        "3.0.0",
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "Server not found",
+		},
+		{
+			name:           "get non-existent server",
+			serverName:     "com.example/non-existent",
+			version:        "1.0.0",
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "Server not found",
+		},
+		{
+			name:           "get version with build metadata (URL encoded)",
+			serverName:     serverName,
+			version:        "1.0.0+20130313144700",
+			expectedStatus: http.StatusOK,
+			checkResult: func(t *testing.T, resp *apiv0.ServerResponse) {
+				t.Helper()
+				assert.Equal(t, "1.0.0+20130313144700", resp.Server.Version)
+				assert.Equal(t, "Version test server with build metadata", resp.Server.Description)
 			},
 		},
 	}
 
-	mockRegistry.Mock.On("GetByID", serverID).Return(serverDetail, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// URL encode the server name and version
+			encodedName := url.PathEscape(tt.serverName)
+			encodedVersion := url.PathEscape(tt.version)
+			req := httptest.NewRequest(http.MethodGet, "/v0/servers/"+encodedName+"/versions/"+encodedVersion, nil)
+			w := httptest.NewRecorder()
 
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.SetPathValue("id", serverID)
-		v0.ServersDetailHandler(mockRegistry).ServeHTTP(w, r)
-	}))
-	defer server.Close()
+			mux.ServeHTTP(w, req)
 
-	// Send request to the test server
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedStatus == http.StatusOK {
+				var resp apiv0.ServerResponse
+				err := json.NewDecoder(w.Body).Decode(&resp)
+				assert.NoError(t, err)
+				assert.Equal(t, tt.serverName, resp.Server.Name)
+				assert.Equal(t, tt.version, resp.Server.Version)
+				assert.NotNil(t, resp.Meta.Official)
+
+				if tt.checkResult != nil {
+					tt.checkResult(t, &resp)
+				}
+			} else if tt.expectedError != "" {
+				assert.Contains(t, w.Body.String(), tt.expectedError)
+			}
+		})
+	}
+}
+
+func TestGetAllVersionsEndpoint(t *testing.T) {
 	ctx := context.Background()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
+	registryService := service.NewRegistryService(database.NewTestDB(t), config.NewConfig())
+
+	serverName := "com.example/multi-version-server"
+
+	// Setup test data with multiple versions
+	versions := []string{"1.0.0", "1.1.0", "2.0.0"}
+	for _, version := range versions {
+		_, err := registryService.CreateServer(ctx, &apiv0.ServerJSON{
+			Schema:      model.CurrentSchemaURL,
+			Name:        serverName,
+			Description: "Multi-version test server " + version,
+			Version:     version,
+		})
+		require.NoError(t, err)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("Failed to send request: %v", err)
+	// Create API
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Test API", "1.0.0"))
+	v0.RegisterServersEndpoints(api, "/v0", registryService)
+
+	tests := []struct {
+		name           string
+		serverName     string
+		expectedStatus int
+		expectedCount  int
+		expectedError  string
+	}{
+		{
+			name:           "get all versions of existing server",
+			serverName:     serverName,
+			expectedStatus: http.StatusOK,
+			expectedCount:  3,
+		},
+		{
+			name:           "get versions of non-existent server",
+			serverName:     "com.example/non-existent",
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "Server not found",
+		},
 	}
-	defer resp.Body.Close()
 
-	// Check status code
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// URL encode the server name
+			encodedName := url.PathEscape(tt.serverName)
+			req := httptest.NewRequest(http.MethodGet, "/v0/servers/"+encodedName+"/versions", nil)
+			w := httptest.NewRecorder()
 
-	// Check content type
-	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+			mux.ServeHTTP(w, req)
 
-	// Parse response body
-	var serverDetailResp model.ServerDetail
-	err = json.NewDecoder(resp.Body).Decode(&serverDetailResp)
-	assert.NoError(t, err)
+			assert.Equal(t, tt.expectedStatus, w.Code)
 
-	// Check the response data
-	assert.Equal(t, *serverDetail, serverDetailResp)
+			if tt.expectedStatus == http.StatusOK {
+				var resp apiv0.ServerListResponse
+				err := json.NewDecoder(w.Body).Decode(&resp)
+				assert.NoError(t, err)
+				assert.Len(t, resp.Servers, tt.expectedCount)
+				assert.Equal(t, tt.expectedCount, resp.Metadata.Count)
 
-	// Verify mock expectations
-	mockRegistry.AssertExpectations(t)
+				// Verify all versions are for the same server
+				for _, server := range resp.Servers {
+					assert.Equal(t, tt.serverName, server.Server.Name)
+					assert.NotNil(t, server.Meta.Official)
+				}
+
+				// Verify all expected versions are present
+				versionSet := make(map[string]bool)
+				for _, server := range resp.Servers {
+					versionSet[server.Server.Version] = true
+				}
+				for _, expectedVersion := range versions {
+					assert.True(t, versionSet[expectedVersion], "Version %s should be present", expectedVersion)
+				}
+
+				// Verify exactly one is marked as latest
+				latestCount := 0
+				for _, server := range resp.Servers {
+					if server.Meta.Official.IsLatest {
+						latestCount++
+					}
+				}
+				assert.Equal(t, 1, latestCount, "Exactly one version should be marked as latest")
+			} else if tt.expectedError != "" {
+				assert.Contains(t, w.Body.String(), tt.expectedError)
+			}
+		})
+	}
+}
+
+func TestServersEndpointEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	registryService := service.NewRegistryService(database.NewTestDB(t), config.NewConfig())
+
+	// Setup test data with edge case names that comply with constraints
+	specialServers := []struct {
+		name        string
+		description string
+		version     string
+	}{
+		{"io.dots.and-dashes/server-name", "Server with dots and dashes", "1.0.0"},
+		{"com.long-namespace-name/very-long-server-name-here", "Long names", "1.0.0"},
+		{"org.test123/server_with_underscores", "Server with underscores", "1.0.0"},
+	}
+
+	for _, server := range specialServers {
+		_, err := registryService.CreateServer(ctx, &apiv0.ServerJSON{
+			Schema:      model.CurrentSchemaURL,
+			Name:        server.name,
+			Description: server.description,
+			Version:     server.version,
+		})
+		require.NoError(t, err)
+	}
+
+	// Create API
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("Test API", "1.0.0"))
+	v0.RegisterServersEndpoints(api, "/v0", registryService)
+
+	t.Run("URL encoding edge cases", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			serverName string
+		}{
+			{"dots and dashes", "io.dots.and-dashes/server-name"},
+			{"long server name", "com.long-namespace-name/very-long-server-name-here"},
+			{"underscores", "org.test123/server_with_underscores"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				// Test latest version endpoint
+				encodedName := url.PathEscape(tt.serverName)
+				req := httptest.NewRequest(http.MethodGet, "/v0/servers/"+encodedName+"/versions/latest", nil)
+				w := httptest.NewRecorder()
+
+				mux.ServeHTTP(w, req)
+
+				assert.Equal(t, http.StatusOK, w.Code)
+
+				var resp apiv0.ServerResponse
+				err := json.NewDecoder(w.Body).Decode(&resp)
+				assert.NoError(t, err)
+				assert.Equal(t, tt.serverName, resp.Server.Name)
+			})
+		}
+	})
+
+	t.Run("query parameter edge cases", func(t *testing.T) {
+		tests := []struct {
+			name           string
+			queryParams    string
+			expectedStatus int
+			expectedError  string
+		}{
+			{"limit too high", "?limit=1000", http.StatusUnprocessableEntity, "validation failed"},
+			{"negative limit", "?limit=-1", http.StatusUnprocessableEntity, "validation failed"},
+			{"invalid updated_since format", "?updated_since=invalid", http.StatusBadRequest, "Invalid updated_since format"},
+			{"future updated_since", "?updated_since=2030-01-01T00:00:00Z", http.StatusOK, ""},
+			{"very old updated_since", "?updated_since=1990-01-01T00:00:00Z", http.StatusOK, ""},
+			{"empty search parameter", "?search=", http.StatusOK, ""},
+			{"search with special characters", "?search=测试", http.StatusOK, ""},
+			{"combined valid parameters", "?search=server&limit=5&version=latest", http.StatusOK, ""},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "/v0/servers"+tt.queryParams, nil)
+				w := httptest.NewRecorder()
+
+				mux.ServeHTTP(w, req)
+
+				assert.Equal(t, tt.expectedStatus, w.Code)
+
+				if tt.expectedStatus == http.StatusOK {
+					var resp apiv0.ServerListResponse
+					err := json.NewDecoder(w.Body).Decode(&resp)
+					assert.NoError(t, err)
+					assert.NotNil(t, resp.Metadata)
+				} else if tt.expectedError != "" {
+					assert.Contains(t, w.Body.String(), tt.expectedError)
+				}
+			})
+		}
+	})
+
+	t.Run("response structure validation", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v0/servers", nil)
+		w := httptest.NewRecorder()
+
+		mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+		var resp apiv0.ServerListResponse
+		err := json.NewDecoder(w.Body).Decode(&resp)
+		assert.NoError(t, err)
+
+		// Verify metadata structure
+		assert.NotNil(t, resp.Metadata)
+		assert.GreaterOrEqual(t, resp.Metadata.Count, 0)
+
+		// Verify each server has complete structure
+		for _, server := range resp.Servers {
+			assert.NotEmpty(t, server.Server.Name)
+			assert.NotEmpty(t, server.Server.Description)
+			assert.NotEmpty(t, server.Server.Version)
+			assert.NotNil(t, server.Meta)
+			assert.NotNil(t, server.Meta.Official)
+			assert.NotZero(t, server.Meta.Official.PublishedAt)
+			assert.Contains(t, []model.Status{model.StatusActive, model.StatusDeprecated, model.StatusDeleted}, server.Meta.Official.Status)
+		}
+	})
 }

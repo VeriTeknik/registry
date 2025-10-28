@@ -1,0 +1,131 @@
+# GoReleaser configuration for MCP Registry
+version: 2
+
+# Build configuration
+builds:
+  # Registry server binary
+  - id: registry
+    binary: registry
+    main: ./cmd/registry
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.GitCommit={{.FullCommit}}
+      - -X main.BuildTime={{.Date}}
+    
+  # Publisher CLI tool binary
+  - id: publisher
+    binary: mcp-publisher
+    main: ./cmd/publisher
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.GitCommit={{.FullCommit}}
+      - -X main.BuildTime={{.Date}}
+
+# This section defines whether we want to release the source code too.
+source:
+  enabled: true
+
+# This section defines how to generate the changelog
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - '^style:'
+      - 'merge conflict'
+      - 'Merge pull request'
+      - 'Merge remote-tracking branch'
+      - 'Merge branch'
+  groups:
+    - title: 'New Features'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance Improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: 'Refactors'
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: 'Documentation'
+      regexp: '^.*?docs?(\([[:word:]]+\))??!?:.+$'
+      order: 4
+    - title: 'Other Changes'
+      order: 999
+
+# This section defines for which artifact types to generate SBOMs.
+sboms:
+  - artifacts: archive
+
+# This section defines the release policy.
+release:
+  github:
+    owner: modelcontextprotocol
+    name: registry
+
+# This section defines how and which artifacts we want to sign for the release.
+signs:
+  - id: archives
+    cmd: cosign
+    args:
+      - "sign-blob"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes" # needed on cosign 2.0.0+
+    artifacts: archive
+    output: true
+    certificate: '{{ trimsuffix (trimsuffix .Env.artifact ".zip") ".tar.gz" }}.pem'
+    
+  # Also sign checksums file for additional verification
+  - id: checksums
+    cmd: cosign
+    args:
+      - "sign-blob"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+    certificate: '{{ trimsuffix .Env.artifact ".txt" }}.pem'
+
+# This section defines the release format.
+archives:
+  # Registry server archive
+  - id: registry
+    name_template: "registry_{{ .Os }}_{{ .Arch }}"
+    ids:
+      - registry
+
+  # Publisher CLI archive
+  - id: publisher
+    name_template: "mcp-publisher_{{ .Os }}_{{ .Arch }}"
+    ids:
+      - publisher
