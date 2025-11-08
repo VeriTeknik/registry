@@ -40,3 +40,10 @@ const (
 	// CurrentSchemaURL is the full URL to the current schema
 	CurrentSchemaURL = "https://static.modelcontextprotocol.io/schemas/" + CurrentSchemaVersion + "/server.schema.json"
 )
+
+// SupportedSchemaVersions are all schema versions we accept (for backward compatibility with official registry)
+var SupportedSchemaVersions = []string{
+	"2025-10-17",
+	"2025-09-29",
+	"2025-09-16",
+}
