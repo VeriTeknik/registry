@@ -313,7 +313,10 @@ LABEL io.modelcontextprotocol.server.name="io.github.username/server-name"
 
 The identifier format is `registry/namespace/repository:tag` (e.g., `docker.io/user/app:1.0.0` or `ghcr.io/user/app:1.0.0`). The version can also be specified as a digest.
 
-The official MCP registry currently supports Docker Hub (`docker.io`) and GitHub Container Registry (`ghcr.io`).
+The official MCP registry supports:
+- Docker Hub (`docker.io`)
+- GitHub Container Registry (`ghcr.io`)
+- Google Artifact Registry (any `*.pkg.dev` domain)
 
 </details>
 
@@ -468,7 +471,7 @@ echo "yourcompany.com. IN TXT \"v=MCPv1; k=ed25519; p=$(openssl pkey -in key.pem
 mcp-publisher login dns --domain yourcompany.com --private-key $(openssl pkey -in key.pem -noout -text | grep -A3 "priv:" | tail -n +2 | tr -d ' :\n')
 ```
 
-The ECDSA P-384 crypto algorithm is also supported, along with HTTP-based authenication. See the [publisher CLI commands reference](../../reference/cli/commands.md) for more details.
+The ECDSA P-384 algorithm is also supported, along with HTTP-based authentication. See the [publisher CLI commands reference](../../reference/cli/commands.md) for more details.
 
 ## Step 5: Publish Your Server
 
