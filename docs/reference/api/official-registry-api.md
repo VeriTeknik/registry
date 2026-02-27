@@ -2,7 +2,7 @@
 
 This document describes the API for the official MCP Registry hosted at `registry.modelcontextprotocol.io`.
 
-This API is based on the [generic registry API](./generic-registry-api.md) with additional endpoints and authentication. For practical examples of consuming the API, see the [API usage guide](../../guides/consuming/use-rest-api.md). For publishing servers using the API, see the [publishing guide](../../guides/publishing/publish-server.md).
+This API is based on the [generic registry API](./generic-registry-api.md) with additional endpoints and authentication. For publishing servers using the API, see the [publishing guide](../../modelcontextprotocol-io/quickstart.mdx).
 
 ## Base URLs
 
@@ -35,27 +35,81 @@ The official registry enforces additional [package validation requirements](../s
 
 ### Server List Filtering
 
-The official registry extends the `GET /v0/servers` endpoint with additional query parameters for improved discovery and synchronization:
+The official registry extends the `GET /v0.1/servers` endpoint with additional query parameters for improved discovery and synchronization:
 
 - `updated_since` - Filter servers updated after RFC3339 timestamp (e.g., `2025-08-07T13:15:04.280Z`)
-- `search` - Case-insensitive substring search on server names (e.g., `filesystem`)  
+- `search` - Case-insensitive substring search on server names (e.g., `filesystem`)
     - This is intentionally simple. For more advanced searching and filtering, use a subregistry.
 - `version` - Filter by version (currently supports `latest` for latest versions only)
+- `include_deleted` - Include deleted servers in results (default: `false`, but automatically `true` when `updated_since` is provided for incremental sync)
 
 These extensions enable efficient incremental synchronization for downstream registries and improved server discovery. Parameters can be combined and work with standard cursor-based pagination.
 
-Example: `GET /v0/servers?search=filesystem&updated_since=2025-08-01T00:00:00Z&version=latest`
+Example: `GET /v0.1/servers?search=filesystem&updated_since=2025-08-01T00:00:00Z&version=latest`
+
+### Server Detail
+
+The `GET /v0.1/servers/{serverName}/versions/{version}` endpoint returns detailed information about a specific server version.
+
+**Path parameters:**
+- `serverName` - URL-encoded server name (e.g., `io.github.user%2Fmy-server`)
+- `version` - Server version or `latest` for the most recent version
+
+**Query parameters:**
+- `include_deleted` - Include deleted servers in results (default: `false`)
+
+### Server Version History
+
+The `GET /v0.1/servers/{serverName}/versions` endpoint returns all versions of a server.
+
+**Path parameters:**
+- `serverName` - URL-encoded server name (e.g., `io.github.user%2Fmy-server`)
+
+**Query parameters:**
+- `include_deleted` - Include deleted servers in results (default: `false`)
 
 ### Additional endpoints
 
 #### Auth endpoints
-- POST `/v0/auth/dns` - Exchange signed DNS challenge for auth token
-- POST `/v0/auth/http` - Exchange signed HTTP challenge for auth token
-- POST `/v0/auth/github-at` - Exchange GitHub access token for auth token
-- POST `/v0/auth/github-oidc` - Exchange GitHub OIDC token for auth token
-- POST `/v0/auth/oidc` - Exchange Google OIDC token for auth token (for admins)
+- POST `/v0.1/auth/dns` - Exchange signed DNS challenge for auth token
+- POST `/v0.1/auth/http` - Exchange signed HTTP challenge for auth token
+- POST `/v0.1/auth/github-at` - Exchange GitHub access token for auth token
+- POST `/v0.1/auth/github-oidc` - Exchange GitHub OIDC token for auth token
+- POST `/v0.1/auth/oidc` - Exchange Google OIDC token for auth token (for admins)
+
+#### Status endpoints
+
+##### Update Single Version Status
+
+`PATCH /v0.1/servers/{serverName}/versions/{version}/status` - Update status of a specific server version.
+
+**Path parameters:**
+- `serverName` - URL-encoded server name (e.g., `io.github.user%2Fmy-server`)
+- `version` - Server version to update
+
+**Request body:**
+- `status` (required) - New status: `active`, `deprecated`, or `deleted`
+- `statusMessage` (optional) - Message explaining the status change (max 500 characters, not allowed when status is `active`)
+
+##### Update All Versions Status
+
+`PATCH /v0.1/servers/{serverName}/status` - Update status of all versions of a server in a single transaction.
+
+**Path parameters:**
+- `serverName` - URL-encoded server name (e.g., `io.github.user%2Fmy-server`)
+
+**Request body:**
+- `status` (required) - New status: `active`, `deprecated`, or `deleted`
+- `statusMessage` (optional) - Message explaining the status change (max 500 characters, not allowed when status is `active`)
+
+**Status values:**
+- `active` - Server is active and visible in default listings
+- `deprecated` - Server is deprecated but still visible with a warning message
+- `deleted` - Server is hidden from default listings (use `include_deleted=true` to show)
+
+**Authentication:** Requires `publish` or `edit` permission for the server namespace.
 
 #### Admin endpoints
 - GET `/metrics` - Prometheus metrics endpoint
-- GET `/v0/health` - Basic health check endpoint
-- PUT `/v0/servers/{serverName}/versions/{version}` - Edit specific server version
+- GET `/v0.1/health` - Basic health check endpoint
+- PUT `/v0.1/servers/{serverName}/versions/{version}` - Edit specific server version

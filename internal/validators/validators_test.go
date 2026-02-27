@@ -33,7 +33,7 @@ func TestValidate(t *testing.T) {
 			expectedError: "$schema field is required",
 		},
 		{
-			name: "Schema version rejects old schema (2025-01-27)",
+			name: "Schema version rejects old schema (2025-01-27) - non-existent version",
 			serverDetail: apiv0.ServerJSON{
 				Schema:      "https://static.modelcontextprotocol.io/schemas/2025-01-27/server.schema.json",
 				Name:        "com.example/test-server",
@@ -44,7 +44,9 @@ func TestValidate(t *testing.T) {
 				},
 				Version: "1.0.0",
 			},
-			expectedError: "schema version https://static.modelcontextprotocol.io/schemas/2025-01-27/server.schema.json is not supported",
+			// This schema version doesn't exist in embedded schemas, so validation should fail
+			// ValidateServerJSON with ValidationSchemaVersionAndSemantic validates that the schema version exists
+			expectedError: "schema version 2025-01-27 not found in embedded schemas",
 		},
 		{
 			name: "Schema version accepts current schema (2025-10-17)",
@@ -455,6 +457,21 @@ func TestValidate(t *testing.T) {
 			expectedError: "websiteUrl must use https scheme: ftp://example.com/docs",
 		},
 		{
+			name: "server with invalid websiteUrl - required HTTPS",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Repository: &model.Repository{
+					URL:    "https://github.com/owner/repo",
+					Source: "github",
+				},
+				Version:    "1.0.0",
+				WebsiteURL: "http://example.com/docs",
+			},
+			expectedError: "websiteUrl must use https scheme: http://example.com/docs",
+		},
+		{
 			name: "server with malformed websiteUrl",
 			serverDetail: apiv0.ServerJSON{
 				Schema:      model.CurrentSchemaURL,
@@ -512,7 +529,7 @@ func TestValidate(t *testing.T) {
 				Version:    "1.0.0",
 				WebsiteURL: "https://different.com/docs",
 			},
-			expectedError: "websiteUrl https://different.com/docs does not match namespace com.example/test-server",
+			expectedError: "",
 		},
 		{
 			name: "package with spaces in name",
@@ -735,7 +752,10 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validators.ValidateServerJSON(&tt.serverDetail)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&tt.serverDetail, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 
 			if tt.expectedError == "" {
 				assert.NoError(t, err)
@@ -797,7 +817,7 @@ func TestValidate_RemoteNamespaceMatch(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "invalid - wrong domain",
+			name: "valid - different domain",
 			serverDetail: apiv0.ServerJSON{
 				Schema: model.CurrentSchemaURL,
 				Name:   "com.example/test-server",
@@ -808,23 +828,22 @@ func TestValidate_RemoteNamespaceMatch(t *testing.T) {
 					},
 				},
 			},
-			expectError: true,
-			errorMsg:    "remote URL host google.com does not match publisher domain example.com",
+			expectError: false,
 		},
 		{
-			name: "invalid - different domain entirely",
+			name: "invalid - not HTTPS",
 			serverDetail: apiv0.ServerJSON{
 				Schema: model.CurrentSchemaURL,
 				Name:   "com.microsoft/server",
 				Remotes: []model.Transport{
 					{
 						Type: "streamable-http",
-						URL:  "https://api.github.com/endpoint",
+						URL:  "http://api.github.com/endpoint",
 					},
 				},
 			},
 			expectError: true,
-			errorMsg:    "remote URL host api.github.com does not match publisher domain microsoft.com",
+			errorMsg:    "invalid remote URL: http://api.github.com/endpoint",
 		},
 		{
 			name: "invalid URL format",
@@ -880,18 +899,21 @@ func TestValidate_RemoteNamespaceMatch(t *testing.T) {
 					},
 					{
 						Type: "streamable-http",
-						URL:  "https://google.com/websocket",
+						URL:  "http://example.com/sse",
 					},
 				},
 			},
 			expectError: true,
-			errorMsg:    "remote URL host google.com does not match publisher domain example.com",
+			errorMsg:    "invalid remote URL: http://example.com/sse",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validators.ValidateServerJSON(&tt.serverDetail)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&tt.serverDetail, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -975,7 +997,10 @@ func TestValidate_ServerNameFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validators.ValidateServerJSON(&tt.serverDetail)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&tt.serverDetail, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1054,7 +1079,10 @@ func TestValidate_MultipleSlashesInServerName(t *testing.T) {
 				Schema: model.CurrentSchemaURL,
 				Name:   tt.serverName,
 			}
-			err := validators.ValidateServerJSON(&serverDetail)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&serverDetail, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1108,7 +1136,10 @@ func TestValidateArgument_ValidNamedArguments(t *testing.T) {
 	for _, arg := range validCases {
 		t.Run("Valid_"+arg.Name, func(t *testing.T) {
 			server := createValidServerWithArgument(arg)
-			err := validators.ValidateServerJSON(&server)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&server, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 			assert.NoError(t, err, "Expected valid argument %+v", arg)
 		})
 	}
@@ -1127,7 +1158,10 @@ func TestValidateArgument_ValidPositionalArguments(t *testing.T) {
 	for i, arg := range positionalCases {
 		t.Run(fmt.Sprintf("ValidPositional_%d", i), func(t *testing.T) {
 			server := createValidServerWithArgument(arg)
-			err := validators.ValidateServerJSON(&server)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&server, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 			assert.NoError(t, err, "Expected valid positional argument %+v", arg)
 		})
 	}
@@ -1149,7 +1183,10 @@ func TestValidateArgument_InvalidNamedArgumentNames(t *testing.T) {
 	for _, tc := range invalidNameCases {
 		t.Run("Invalid_"+tc.name, func(t *testing.T) {
 			server := createValidServerWithArgument(tc.arg)
-			err := validators.ValidateServerJSON(&server)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&server, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 			assert.Error(t, err, "Expected error for invalid named argument name: %+v", tc.arg)
 		})
 	}
@@ -1197,7 +1234,10 @@ func TestValidateArgument_InvalidValueFields(t *testing.T) {
 	for _, tc := range invalidValueCases {
 		t.Run("Invalid_"+tc.name, func(t *testing.T) {
 			server := createValidServerWithArgument(tc.arg)
-			err := validators.ValidateServerJSON(&server)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&server, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 			assert.Error(t, err, "Expected error for argument with value starting with name: %+v", tc.arg)
 		})
 	}
@@ -1253,7 +1293,10 @@ func TestValidateArgument_ValidValueFields(t *testing.T) {
 	for _, tc := range validValueCases {
 		t.Run("Valid_"+tc.name, func(t *testing.T) {
 			server := createValidServerWithArgument(tc.arg)
-			err := validators.ValidateServerJSON(&server)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&server, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 			assert.NoError(t, err, "Expected valid argument %+v", tc.arg)
 		})
 	}
@@ -1584,11 +1627,146 @@ func TestValidate_TransportValidation(t *testing.T) {
 			},
 			expectedError: "invalid remote URL",
 		},
+		// Remote transport variable tests
+		{
+			name: "remote transport with URL variables - valid",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Remotes: []model.Transport{
+					{
+						Type: "streamable-http",
+						URL:  "https://example.com/mcp/{tenant_id}",
+						Variables: map[string]model.Input{
+							"tenant_id": {
+								Description: "Tenant identifier",
+								IsRequired:  true,
+							},
+						},
+					},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "remote transport with multiple URL variables - valid",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Remotes: []model.Transport{
+					{
+						Type: "streamable-http",
+						URL:  "https://{region}.example.com/mcp/{tenant_id}",
+						Variables: map[string]model.Input{
+							"region": {
+								Description: "Server region",
+								Choices:     []string{"us-east-1", "eu-west-1"},
+							},
+							"tenant_id": {
+								Description: "Tenant identifier",
+								IsRequired:  true,
+							},
+						},
+					},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "remote transport with undefined URL variable - invalid",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Remotes: []model.Transport{
+					{
+						Type: "streamable-http",
+						URL:  "https://example.com/mcp/{tenant_id}",
+						// Missing variables definition
+					},
+				},
+			},
+			expectedError: "template variables in URL",
+		},
+		{
+			name: "remote transport with missing variable in URL - invalid",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Remotes: []model.Transport{
+					{
+						Type: "streamable-http",
+						URL:  "https://example.com/mcp/{tenant_id}/{region}",
+						Variables: map[string]model.Input{
+							"tenant_id": {
+								Description: "Tenant identifier",
+							},
+							// Missing "region" variable
+						},
+					},
+				},
+			},
+			expectedError: "template variables in URL",
+		},
+		{
+			name: "remote transport SSE with URL variables - valid",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Remotes: []model.Transport{
+					{
+						Type: "sse",
+						URL:  "https://events.example.com/mcp/{api_key}",
+						Variables: map[string]model.Input{
+							"api_key": {
+								Description: "API key for authentication",
+								IsRequired:  true,
+								IsSecret:    true,
+							},
+						},
+					},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "remote transport with variables but no template in URL - valid",
+			serverDetail: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Remotes: []model.Transport{
+					{
+						Type: "streamable-http",
+						URL:  "https://example.com/mcp",
+						Variables: map[string]model.Input{
+							"unused_var": {
+								Description: "This variable is defined but not used",
+							},
+						},
+					},
+				},
+			},
+			expectedError: "", // Valid - variables can be defined but not used
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validators.ValidateServerJSON(&tt.serverDetail)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&tt.serverDetail, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 
 			if tt.expectedError == "" {
 				assert.NoError(t, err)
@@ -2017,7 +2195,10 @@ func TestValidateTitle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validators.ValidateServerJSON(&tt.serverDetail)
+			// ValidateServerJSON returns all validation results; using FirstError() to preserve existing test behavior
+			// In future, consider using result.Issues for comprehensive error reporting
+			result := validators.ValidateServerJSON(&tt.serverDetail, validators.ValidationSchemaVersionAndSemantic)
+			err := result.FirstError()
 			if tt.expectedError == "" {
 				assert.NoError(t, err)
 			} else {

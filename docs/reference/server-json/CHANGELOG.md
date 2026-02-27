@@ -2,6 +2,68 @@
 
 Changes to the server.json schema and format.
 
+## Draft (Unreleased)
+
+This section tracks changes that are in development and not yet released. The draft schema is available at [`server.schema.json`](./draft/server.schema.json) in this repository.
+
+### Changed
+
+#### Transport URL Pattern Now Accepts Template Variables
+
+The `url` field in `StreamableHttpTransport` and `SseTransport` now accepts URLs that start with a template variable (e.g., `{baseUrl}`), in addition to the existing `http://` and `https://` prefixes.
+
+**Example:**
+```json
+{
+  "remotes": [{
+    "type": "streamable-http",
+    "url": "{baseUrl}/mcp",
+    "variables": {
+      "baseUrl": {
+        "description": "Base URL for the MCP server",
+        "isRequired": true
+      }
+    }
+  }]
+}
+```
+
+**Migration:** No changes required. Existing servers continue to work unchanged.
+
+### Notes
+
+When ready for release, changes in this section will be moved to a dated version section (e.g., `## 2025-XX-XX`) and the schema will be published to a versioned URL.
+
+---
+
+## 2025-12-11
+
+### Changed
+
+#### URL Template Variables for Remote Servers ([#570](https://github.com/modelcontextprotocol/registry/pull/570))
+
+Remote servers can now define URL template variables using `{curly_braces}` notation. This enables multi-tenant deployments where a single server definition can support multiple endpoints with configurable values.
+
+**Example:**
+```json
+{
+  "remotes": [{
+    "type": "streamable-http",
+    "url": "https://{tenant_id}.api.example.com/mcp",
+    "variables": {
+      "tenant_id": {
+        "description": "Your tenant identifier",
+        "isRequired": true
+      }
+    }
+  }]
+}
+```
+
+**Migration:** No changes required. Existing servers continue to work unchanged.
+
+---
+
 ## 2025-10-17
 
 ### Changed

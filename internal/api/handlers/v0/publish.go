@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/registry/internal/auth"
 	"github.com/modelcontextprotocol/registry/internal/config"
 	"github.com/modelcontextprotocol/registry/internal/service"
+	"github.com/modelcontextprotocol/registry/internal/validators"
 	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 )
 
@@ -53,6 +54,12 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 			return nil, huma.Error403Forbidden(buildPermissionErrorMessage(input.Body.Name, claims.Permissions))
 		}
 
+		// Validate server JSON structure and schema (returns 422 on validation failure)
+		validationResult := validators.ValidateServerJSON(&input.Body, validators.ValidationSchemaVersionAndSemantic)
+		if !validationResult.Valid {
+			return nil, huma.Error422UnprocessableEntity("Failed to publish server, invalid schema: call /validate for details")
+		}
+
 		// Publish the server with extensions
 		publishedServer, err := registry.CreateServer(ctx, &input.Body)
 		if err != nil {
@@ -83,6 +90,11 @@ func buildPermissionErrorMessage(attemptedResource string, permissions []auth.Pe
 		errorMsg += ". You do not have any publish permissions"
 	}
 	errorMsg += ". Attempting to publish: " + attemptedResource
+
+	// Add helpful hint for GitHub organization publishing issues
+	if strings.HasPrefix(attemptedResource, "io.github.") {
+		errorMsg += ". If you're trying to publish to a GitHub organization, you may need to make your organization membership public in your GitHub settings: https://docs.github.com/en/account-and-profile/how-tos/organization-membership/publicizing-or-hiding-organization-membership"
+	}
 
 	return errorMsg
 }

@@ -2,7 +2,7 @@
 
 Complete command reference for the `mcp-publisher` CLI tool.
 
-See the [publishing guide](../../guides/publishing/publish-server.md) for a walkthrough of using the CLI to publish a server.
+See the [publishing guide](../../modelcontextprotocol-io/quickstart.mdx) for a walkthrough of using the CLI to publish a server.
 
 ## Installation
 
@@ -72,7 +72,7 @@ mcp-publisher login github-oidc [--registry=URL]
 - Requires `id-token: write` permission in workflow
 - No browser interaction needed
 
-Also see [the guide to publishing from GitHub Actions](../../guides/publishing/github-actions.md).
+Also see [the guide to publishing from GitHub Actions](../../modelcontextprotocol-io/github-actions.mdx).
 
 #### DNS Verification
 ```bash
@@ -207,39 +207,119 @@ mcp-publisher login none [--registry=URL]
 - No authentication - for local testing only
 - Only works with local registry instances
 
+### `mcp-publisher validate`
+
+Validate a `server.json` file without publishing.
+
+**Usage:**
+```bash
+mcp-publisher validate [file]
+```
+
+**Arguments:**
+- `file` - Path to server.json file (default: `./server.json`)
+
+**Behavior:**
+- Performs exhaustive validation, reporting all issues at once (not just the first error)
+- Validates JSON syntax and schema compliance
+- Runs semantic validation (business logic checks)
+- Checks for deprecated schema versions and provides migration guidance
+- Includes detailed error locations with JSON paths (e.g., `packages[0].transport.url`)
+- Shows validation issue type (json, schema, semantic, linter)
+- Displays severity level (error, warning, info)
+- Provides schema references showing which validation rule triggered each error
+
+**Example output:**
+```bash
+$ mcp-publisher validate
+✅ server.json is valid
+
+$ mcp-publisher validate custom-server.json
+❌ Validation failed with 2 issue(s):
+
+1. [error] repository.url (schema)
+   '' has invalid format 'uri'
+   Reference: #/definitions/Repository/properties/url/format from: [#/definitions/ServerDetail]/properties/repository/[#/definitions/Repository]/properties/url/format
+
+2. [error] name (semantic)
+   server name must be in format 'dns-namespace/name'
+   Reference: invalid-server-name
+```
+
 ### `mcp-publisher publish`
 
 Publish server to the registry.
 
-For detailed guidance on the publishing process, see the [publishing guide](../../guides/publishing/publish-server.md).
+For detailed guidance on the publishing process, see the [publishing guide](../../modelcontextprotocol-io/quickstart.mdx).
 
 **Usage:**
 ```bash
-mcp-publisher publish [options]
+mcp-publisher publish [PATH]
 ```
 
 **Options:**
-- `--file=PATH` - Path to server.json (default: `./server.json`)
-- `--registry=URL` - Registry URL override
-- `--dry-run` - Validate without publishing
+- `PATH` - Path to server.json (default: `./server.json`)
 
 **Process:**
 1. Validates `server.json` against schema
-2. Verifies package ownership (see [Official Registry Requirements](../server-json/official-registry-requirements.md))
-3. Checks namespace authentication
-4. Publishes to registry
+2. Publishes the `server.json` to the registry server URL specified in the login token
+3. Server: Verifies package ownership (see [Official Registry Requirements](../server-json/official-registry-requirements.md))
+4. Server: Checks namespace authentication
+5. Server: Publishes to registry
 
 **Example:**
 ```bash
 # Basic publish
 mcp-publisher publish
 
-# Dry run validation
-mcp-publisher publish --dry-run
-
 # Custom file location  
-mcp-publisher publish --file=./config/server.json
+mcp-publisher publish ./config/server.json
 ```
+
+### `mcp-publisher status`
+
+Update the lifecycle status of a published server.
+
+**Usage:**
+```bash
+mcp-publisher status --status <active|deprecated|deleted> [flags] <server-name> [version]
+```
+
+**Flags:**
+- `--status` (required) - New status: `active`, `deprecated`, or `deleted`
+- `--message` - Optional message explaining the status change (not allowed when status is `active`)
+- `--all-versions` - Apply status change to all versions of the server
+- `--yes`, `-y` - Skip confirmation prompt (only applies when using `--all-versions`)
+
+**Arguments:**
+- `server-name` - Full server name (e.g., `io.github.user/my-server`)
+- `version` - Server version to update (required unless `--all-versions` is set)
+
+**Status Values:**
+- `active` - Server is active and visible in default listings
+- `deprecated` - Server is deprecated but still visible with a warning message
+- `deleted` - Server is hidden from default listings
+
+**Examples:**
+```bash
+# Deprecate a specific version
+mcp-publisher status --status deprecated --message "Please upgrade to 2.0.0" \
+  io.github.user/my-server 1.0.0
+
+# Delete a version with security issues
+mcp-publisher status --status deleted --message "Critical security vulnerability" \
+  io.github.user/my-server 1.0.0
+
+# Restore a version to active
+mcp-publisher status --status active io.github.user/my-server 1.0.0
+
+# Deprecate all versions at once
+mcp-publisher status --status deprecated --all-versions --message "Project archived" \
+  io.github.user/my-server
+```
+
+**Requirements:**
+- Must be logged in with `publish` or `edit` permission for the server namespace
 
 ### `mcp-publisher logout`
 

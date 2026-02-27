@@ -2,7 +2,7 @@
 
 CLI tool for publishing MCP servers to the registry.
 
-> These docs are for contributors. See the [Publisher User Guide](../../docs/guides/publishing/publish-server.md) for end-user documentation.
+> These docs are for contributors. See the [Publisher User Guide](../../docs/modelcontextprotocol-io/quickstart.mdx) for end-user documentation.
 
 ## Quick Development Setup
 
@@ -21,8 +21,9 @@ make dev-compose  # Start local registry
 
 ### Commands
 - **`init`** - Generate server.json templates with auto-detection
-- **`login`** - Handle authentication (github, dns, http, none)  
+- **`login`** - Handle authentication (github, dns, http, none)
 - **`publish`** - Validate and upload servers to registry
+- **`status`** - Update server lifecycle status (active, deprecated, deleted)
 - **`logout`** - Clear stored credentials
 
 ### Authentication Providers
