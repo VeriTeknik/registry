@@ -72,6 +72,13 @@ mcp-publisher login github-oidc [--registry=URL]
 - Requires `id-token: write` permission in workflow
 - No browser interaction needed
 
+The CLI derives the OIDC `aud` claim from `--registry` (scheme + host, e.g.
+`https://registry.modelcontextprotocol.io`) so tokens are bound to the specific
+deployment they were minted for. Self-hosters must set
+`MCP_REGISTRY_GITHUB_OIDC_AUDIENCE` on the registry to the matching value;
+publishers running an older `mcp-publisher` will fail with `invalid audience`
+and need to upgrade.
+
 Also see [the guide to publishing from GitHub Actions](../../modelcontextprotocol-io/github-actions.mdx).
 
 #### DNS Verification
@@ -331,17 +338,20 @@ mcp-publisher logout
 ```
 
 **Behavior:**
-- Removes `~/.mcp_publisher_token`
+- Removes `~/.config/mcp-publisher/token.json`
+- Also cleans up legacy token files (`~/.mcp_publisher_token`, `.mcpregistry_*`)
 - Does not revoke tokens on server side
 
 ## Configuration
 
 ### Token Storage
-Authentication tokens stored in `~/.mcp_publisher_token` as JSON:
+Authentication tokens are stored in `~/.config/mcp-publisher/token.json` as JSON:
 ```json
 {
   "token": "jwt-token-here",
-  "registry_url": "https://registry.modelcontextprotocol.io",
-  "expires_at": "2024-12-31T23:59:59Z"
+  "method": "github",
+  "registry": "https://registry.modelcontextprotocol.io"
 }
 ```
+
+> **Note:** Tokens were previously stored in `~/.mcp_publisher_token`. If you are upgrading, run `mcp-publisher logout` followed by `mcp-publisher login` to migrate to the new location.

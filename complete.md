@@ -1991,30 +1991,26 @@ For detailed guidance on the publishing process, see the [publishing guide](../.
 
 **Usage:**
 ```bash
-mcp-publisher publish [options]
+mcp-publisher publish [PATH]
 ```
 
 **Options:**
-- `--file=PATH` - Path to server.json (default: `./server.json`)
-- `--registry=URL` - Registry URL override
-- `--dry-run` - Validate without publishing
+- `PATH` - Path to server.json (default: `./server.json`)
 
 **Process:**
 1. Validates `server.json` against schema
-2. Verifies package ownership (see [Official Registry Requirements](../server-json/official-registry-requirements.md))
-3. Checks namespace authentication
-4. Publishes to registry
+2. Publishes the `server.json` to the registry server URL specified in the login token
+3. Server: Verifies package ownership (see [Official Registry Requirements](../server-json/official-registry-requirements.md))
+4. Server: Checks namespace authentication
+5. Server: Publishes to registry
 
 **Example:**
 ```bash
 # Basic publish
 mcp-publisher publish
 
-# Dry run validation
-mcp-publisher publish --dry-run
-
 # Custom file location
-mcp-publisher publish --file=./config/server.json
+mcp-publisher publish ./config/server.json
 ```
 
 ### `mcp-publisher logout`
@@ -2027,20 +2023,23 @@ mcp-publisher logout
 ```
 
 **Behavior:**
-- Removes `~/.mcp_publisher_token`
+- Removes `~/.config/mcp-publisher/token.json`
+- Also cleans up legacy token files (`~/.mcp_publisher_token`, `.mcpregistry_*`)
 - Does not revoke tokens on server side
 
 ## Configuration
 
 ### Token Storage
-Authentication tokens stored in `~/.mcp_publisher_token` as JSON:
+Authentication tokens are stored in `~/.config/mcp-publisher/token.json` as JSON:
 ```json
 {
   "token": "jwt-token-here",
-  "registry_url": "https://registry.modelcontextprotocol.io",
-  "expires_at": "2024-12-31T23:59:59Z"
+  "method": "github",
+  "registry": "https://registry.modelcontextprotocol.io"
 }
 ```
+
+> **Note:** Tokens were previously stored in `~/.mcp_publisher_token`. If you are upgrading, run `mcp-publisher logout` followed by `mcp-publisher login` to migrate to the new location.
 
 ---
 
